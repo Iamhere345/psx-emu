@@ -89,6 +89,9 @@ impl R3000 {
 	}
 
 	pub fn run_instruction(&mut self, bus: &mut Bus) {
+
+		self.check_tty_putchar();
+
 		let instruction = bus.read32(self.pc);
 
 		let next_pc = match self.delayed_branch.take() {
@@ -102,5 +105,15 @@ impl R3000 {
 		self.registers.process_delayed_loads();
 
 		self.pc = next_pc;
+	}
+
+	fn check_tty_putchar(&self) {
+		let pc = self.pc & 0x1FFFFFFF;
+
+		if (pc == 0xA0 && self.registers.read_gpr(9) == 0x3C) || (pc == 0xB0 && self.registers.read_gpr(9) == 0x3D) {
+			let char = self.registers.read_gpr(4) as u8 as char;
+
+			print!("{char}");
+		}
 	}
 }
