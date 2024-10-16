@@ -7,6 +7,9 @@ const RAM_END: usize = RAM_START + (2048 * 1024);
 const MEMCONTROL_START: usize = 0x1F801000;
 const MEMCONTROL_END: usize = 0x1F801000 + 36;
 
+const IRQ_START: usize = 0x1F801070;
+const IRQ_END: usize = IRQ_START + 8;
+
 const SPU_START: usize = 0x1F801C00;
 const SPU_END: usize = SPU_START + 0x280;
 
@@ -124,6 +127,7 @@ impl Bus {
 					_ => println!("unhandled write to memcontrol [0x{:X}] 0x{:X}", addr as usize - MEMCONTROL_START, write),
 				}
 			}
+			IRQ_START			..= IRQ_END => println!("Unhandled write to IRQ register [0x{:X}] 0x{:X}", addr, write),
 			// io register RAM_SIZE
 			0x1F801060	..= 0x1F801064 => {}
 			// io register CACHE_CONTROL
