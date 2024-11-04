@@ -99,7 +99,6 @@ impl R3000 {
 			None => self.pc.wrapping_add(4),
 		};
 
-		// TODO decode and execute
 		self.decode_and_exec(Instruction::from_u32(instruction), bus);
 
 		self.registers.process_delayed_loads();

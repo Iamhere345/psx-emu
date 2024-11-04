@@ -58,6 +58,7 @@ impl Instruction {
 
 impl R3000 {
 	pub fn decode_and_exec(&mut self, instr: Instruction, bus: &mut Bus) {
+		
 		match instr.opcode() {
 
 			0x00 => match instr.funct() {
@@ -65,6 +66,7 @@ impl R3000 {
 				0x03 => self.op_sra(instr),
 				0x08 => self.op_jr(instr),
 				0x09 => self.op_jalr(instr),
+				0x12 => self.op_mflo(instr),
 				0x1A => self.op_div(instr),
 				0x20 => self.op_add(instr),
 				0x21 => self.op_addu(instr),
@@ -120,7 +122,7 @@ impl R3000 {
 	fn op_sw(&mut self, instr: Instruction, bus: &mut Bus) {
 
 		if self.cop0.read_reg(12) & 0x10000 != 0 {
-			println!("ignoring store while cache is isolated");
+			//println!("ignoring store while cache is isolated");
 			return;
 		}
 
@@ -134,7 +136,7 @@ impl R3000 {
 	fn op_lw(&mut self, instr: Instruction, bus: &mut Bus) {
 
 		if self.cop0.read_reg(12) & 0x10000 != 0 {
-			println!("ignoring load while cache is isolated");
+			//println!("ignoring load while cache is isolated");
 			return;
 		}
 
@@ -147,7 +149,7 @@ impl R3000 {
 	fn op_sh(&mut self, instr: Instruction, bus: &mut Bus) {
 
 		if self.cop0.read_reg(12) & 0x10000 != 0 {
-			println!("ignoring store while cache is isolated");
+			//println!("ignoring store while cache is isolated");
 			return;
 		}
 
@@ -160,7 +162,7 @@ impl R3000 {
 	fn op_sb(&mut self, instr: Instruction, bus: &mut Bus) {
 
 		if self.cop0.read_reg(12) & 0x10000 != 0 {
-			println!("ignoring store while cache is isolated");
+			//println!("ignoring store while cache is isolated");
 			return;
 		}
 
@@ -188,6 +190,10 @@ impl R3000 {
 		let value = bus.read8(addr);
 
 		self.registers.write_gpr_delayed(instr.reg_tgt(), value as u32);
+	}
+
+	fn op_mflo(&mut self, instr: Instruction) {
+		self.registers.write_gpr(instr.reg_dst(), self.registers.lo);
 	}
 
 	// ? Logical Instructions
@@ -321,13 +327,13 @@ impl R3000 {
 
 		self.delayed_branch = Some((self.pc & 0xF0000000) | (jmp_addr << 2));
 
-		self.registers.write_gpr(31, self.pc.wrapping_add(4));
+		self.registers.write_gpr(31, self.pc.wrapping_add(8));
 	}
 
 	fn op_jalr(&mut self, instr: Instruction) {
 		self.delayed_branch = Some(self.registers.read_gpr(instr.reg_src()));
 
-		self.registers.write_gpr(instr.reg_dst(), self.pc.wrapping_add(4));
+		self.registers.write_gpr(instr.reg_dst(), self.pc.wrapping_add(8));
 	}
 
 	fn op_jr(&mut self, instr: Instruction) {
@@ -337,6 +343,7 @@ impl R3000 {
 	}
 
 	fn op_bne(&mut self, instr: Instruction) {
+
 		if self.registers.read_gpr(instr.reg_src()) != self.registers.read_gpr(instr.reg_tgt()) {
 			self.delayed_branch = Some(self.pc.wrapping_add(instr.imm16_se() << 2).wrapping_add(4));
 		}
@@ -349,13 +356,13 @@ impl R3000 {
 	}
 
 	fn op_bgtz(&mut self, instr: Instruction) {
-		if self.registers.read_gpr(instr.reg_src()) > 0 {
+		if self.registers.read_gpr(instr.reg_src()) as i32 > 0 {
 			self.delayed_branch = Some(self.pc.wrapping_add(instr.imm16_se() << 2).wrapping_add(4));
 		}
 	}
 
 	fn op_blez(&mut self, instr: Instruction) {
-		if self.registers.read_gpr(instr.reg_src()) <= 0 {
+		if self.registers.read_gpr(instr.reg_src()) as i32 <= 0 {
 			self.delayed_branch = Some(self.pc.wrapping_add(instr.imm16_se() << 2).wrapping_add(4));
 		}
 	}
@@ -364,7 +371,7 @@ impl R3000 {
 	fn op_bcondz(&mut self, instr: Instruction) {
 
 		let is_bgez = (instr.raw >> 16) & 0x1;
-		let link = (instr.raw >> 7) & 0xF == 0x8;
+		let link = (instr.raw >> 17) & 0xF == 0x8;
 
 		let reg_src = self.registers.read_gpr(instr.reg_src()) as i32;
 		
@@ -373,7 +380,7 @@ impl R3000 {
 		}
 
 		if link {
-			self.registers.write_gpr(31, self.pc.wrapping_add(4));
+			self.registers.write_gpr(31, self.pc.wrapping_add(8));
 		}
 
 	}
