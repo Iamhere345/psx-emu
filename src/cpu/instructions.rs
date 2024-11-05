@@ -1,7 +1,6 @@
 use crate::bus::Bus;
 
-use super::R3000;
-
+use super::{Exception, R3000};
 
 pub struct Instruction {
 	raw: u32,
@@ -58,21 +57,28 @@ impl Instruction {
 
 impl R3000 {
 	pub fn decode_and_exec(&mut self, instr: Instruction, bus: &mut Bus) {
-		
+
 		match instr.opcode() {
 
 			0x00 => match instr.funct() {
 				0x00 => self.op_sll(instr),
+				0x02 => self.op_srl(instr),
 				0x03 => self.op_sra(instr),
 				0x08 => self.op_jr(instr),
 				0x09 => self.op_jalr(instr),
+				0x0C => self.op_syscall(instr),
+				0x10 => self.op_mfhi(instr),
+				0x11 => self.op_mthi(instr),
 				0x12 => self.op_mflo(instr),
+				0x13 => self.op_mtlo(instr),
 				0x1A => self.op_div(instr),
+				0x1B => self.op_divu(instr),
 				0x20 => self.op_add(instr),
 				0x21 => self.op_addu(instr),
 				0x23 => self.op_subu(instr),
 				0x24 => self.op_and(instr),
 				0x25 => self.op_or(instr),
+				0x2A => self.op_slt(instr),
 				0x2B => self.op_sltu(instr),
 
 				_ => panic!("Unimplemented secondary opcode: 0x{:X} (PC: 0x{:X}) (funct: 0x{:X})", instr.raw, self.pc, instr.funct()),
@@ -89,14 +95,15 @@ impl R3000 {
 			0x08 => self.op_addi(instr),
 			0x09 => self.op_addiu(instr),
 			0x0A => self.op_slti(instr),
+			0x0B => self.op_sltiu(instr),
 			0x0C => self.op_andi(instr),
 			0x0D => self.op_ori(instr),
 			0x0F => self.op_lui(instr),
 
 			0x10 => match instr.cop0_opcode() {
-				0x0 => self.op_mfc(instr),
-				0x4 => self.op_mtc(instr),
-
+				0x00 => self.op_mfc(instr),
+				0x04 => self.op_mtc(instr),
+				0x10 => self.op_rfe(instr),
 				_ => panic!("Unimplemented cop0 opcode 0x{:X} (PC: 0x{:X}) (cop0_opcode: 0b{:b}/0x{:X})", instr.raw, self.pc, instr.cop0_opcode(), instr.cop0_opcode()),
 			}
 
@@ -109,6 +116,7 @@ impl R3000 {
 
 			_ => panic!("Unimplemented opcode: 0x{:X} (PC: 0x{:X}) (Opcode: 0x{:X})", instr.raw, self.pc, instr.opcode()),
 		}
+
 	}
 
 	// ? Load/Store Instructions
@@ -130,7 +138,11 @@ impl R3000 {
 
 		let addr = offset.wrapping_add(instr.imm16_se());
 
-		bus.write32(addr, self.registers.read_gpr(instr.reg_tgt()));
+		if addr % 4 == 0 {
+			bus.write32(addr, self.registers.read_gpr(instr.reg_tgt()));
+		} else {
+			self.pending_exception = Some(Exception::AddrStoreError);
+		}
 	}
 
 	fn op_lw(&mut self, instr: Instruction, bus: &mut Bus) {
@@ -143,7 +155,11 @@ impl R3000 {
 		let offset = self.registers.read_gpr(instr.reg_src());
 		let addr = offset.wrapping_add(instr.imm16_se());
 
-		self.registers.write_gpr_delayed(instr.reg_tgt(), bus.read32(addr));
+		if addr % 4 == 0 {
+			self.registers.write_gpr_delayed(instr.reg_tgt(), bus.read32(addr));
+		} else {
+			self.pending_exception = Some(Exception::AddrLoadError)
+		}
 	}
 
 	fn op_sh(&mut self, instr: Instruction, bus: &mut Bus) {
@@ -156,7 +172,11 @@ impl R3000 {
 		let offset = self.registers.read_gpr(instr.reg_src());
 		let addr = offset.wrapping_add(instr.imm16_se());
 
-		bus.write16(addr, self.registers.read_gpr(instr.reg_tgt()) as u16);
+		if addr % 2 == 0 {
+			bus.write16(addr, self.registers.read_gpr(instr.reg_tgt()) as u16);
+		} else {
+			self.pending_exception = Some(Exception::AddrStoreError);
+		}
 	}
 
 	fn op_sb(&mut self, instr: Instruction, bus: &mut Bus) {
@@ -192,8 +212,20 @@ impl R3000 {
 		self.registers.write_gpr_delayed(instr.reg_tgt(), value as u32);
 	}
 
+	fn op_mfhi(&mut self, instr: Instruction) {
+		self.registers.write_gpr(instr.reg_dst(), self.registers.hi);
+	}
+
 	fn op_mflo(&mut self, instr: Instruction) {
 		self.registers.write_gpr(instr.reg_dst(), self.registers.lo);
+	}
+
+	fn op_mthi(&mut self, instr: Instruction) {
+		self.registers.hi = self.registers.read_gpr(instr.reg_src());
+	}
+
+	fn op_mtlo(&mut self, instr: Instruction) {
+		self.registers.lo = self.registers.read_gpr(instr.reg_src());
 	}
 
 	// ? Logical Instructions
@@ -246,10 +278,11 @@ impl R3000 {
 
 		let result = match src.checked_add(instr.imm16_se() as i32) {
 			Some(result) => result as u32,
-			None => panic!("addition overflow exception")
+			None => { self.pending_exception = Some(Exception::ArithmeticOverflow); return }
 		};
 
 		self.registers.write_gpr(instr.reg_tgt(), result);
+
 	}
 
 	fn op_add(&mut self, instr: Instruction) {
@@ -258,10 +291,11 @@ impl R3000 {
 
 		let result = match src.checked_add(self.registers.read_gpr(instr.reg_tgt()) as i32) {
 			Some(result) => result as u32,
-			None => panic!("addition overflow exception")
+			None => { self.pending_exception = Some(Exception::ArithmeticOverflow); return }
 		};
 
 		self.registers.write_gpr(instr.reg_dst(), result);
+
 	}
 
 	fn op_subu(&mut self, instr: Instruction) {
@@ -270,18 +304,32 @@ impl R3000 {
 		self.registers.write_gpr(instr.reg_dst(), result);
 	}
 
+	fn op_slt(&mut self, instr: Instruction) {
+		let src = self.registers.read_gpr(instr.reg_src()) as i32;
+		let tgt = self.registers.read_gpr(instr.reg_tgt()) as i32;
+
+		self.registers.write_gpr(instr.reg_dst(), (src < tgt) as u32);
+	}
+
 	fn op_sltu(&mut self, instr: Instruction) {
 		let src = self.registers.read_gpr(instr.reg_src());
 		let tgt = self.registers.read_gpr(instr.reg_tgt());
 
-		self.registers.write_gpr(instr.reg_dst(), if src < tgt { 1 } else { 0 });
+		self.registers.write_gpr(instr.reg_dst(), (src < tgt) as u32);
 	}
 
 	fn op_slti(&mut self, instr: Instruction) {
 		let src = self.registers.read_gpr(instr.reg_src()) as i32;
 		let imm = instr.imm16_se() as i32;
 
-		self.registers.write_gpr(instr.reg_dst(), (src < imm) as u32);
+		self.registers.write_gpr(instr.reg_tgt(), (src < imm) as u32);
+	}
+
+	fn op_sltiu(&mut self, instr: Instruction) {
+		let src = self.registers.read_gpr(instr.reg_src());
+		let imm = instr.imm16_se();
+
+		self.registers.write_gpr(instr.reg_tgt(), (src < imm) as u32);
 	}
 
 	fn op_div(&mut self, instr: Instruction) {
@@ -308,12 +356,34 @@ impl R3000 {
 		}
 	}
 
+	fn op_divu(&mut self, instr: Instruction) {
+		let numerator = self.registers.read_gpr(instr.reg_src());
+		let denominator = self.registers.read_gpr(instr.reg_tgt());
+
+		// divide by zero has special values for HI/LO
+		if denominator == 0 {
+			self.registers.hi = numerator as u32;
+			self.registers.lo = 0xFFFFFFFF;
+		} else {
+			// normal division
+			self.registers.hi = (numerator % denominator) as u32;
+			self.registers.lo = (numerator / denominator) as u32;
+		}
+	}
+
 	// ? Shift Instructions
 	fn op_sll(&mut self, instr: Instruction) {
 		let new_val = self.registers.read_gpr(instr.reg_tgt()) << instr.shamt();
 
 		self.registers.write_gpr(instr.reg_dst(), new_val);
 	}
+
+	fn op_srl(&mut self, instr: Instruction) {
+		let new_val = self.registers.read_gpr(instr.reg_tgt()) >> instr.shamt();
+
+		self.registers.write_gpr(instr.reg_dst(), new_val);
+	}
+
 
 	// ? Branch Instructions
 	fn op_j(&mut self, instr: Instruction) {
@@ -386,6 +456,9 @@ impl R3000 {
 	}
 
 	// ? Trap Instructions
+	fn op_syscall(&mut self, instr: Instruction) {
+		self.pending_exception = Some(Exception::Syscall);
+	}
 
 	// ? Cop0 Instructions
 	fn op_mfc(&mut self, instr: Instruction) {
@@ -398,5 +471,16 @@ impl R3000 {
 		self.cop0.write_reg(instr.reg_dst(), self.registers.read_gpr(instr.reg_tgt()));
 	}
 
+	fn op_rfe(&mut self, instr: Instruction) {
+
+		if instr.raw & 0x3F != 0b010000 {
+			panic!("invalid cop0 encoding: 0x{:X}", instr.raw);
+		}
+
+		let mode = self.cop0.reg_sr & 0x3F;
+		self.cop0.reg_sr &= !0x3F;
+		self.cop0.reg_sr |= mode >> 2;
+
+	}
 
 }

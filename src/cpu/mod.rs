@@ -1,7 +1,7 @@
 use std::mem;
 
 use crate::bus::Bus;
-use cop0::Cop0;
+use cop0::*;
 use instructions::Instruction;
 
 mod instructions;
@@ -74,6 +74,8 @@ pub struct R3000 {
 	cop0: Cop0,
 
 	delayed_branch: Option<u32>,
+
+	pending_exception: Option<Exception>
 }
 
 impl R3000 {
@@ -85,6 +87,8 @@ impl R3000 {
 			cop0: Cop0::new(),
 
 			delayed_branch: None,
+
+			pending_exception: None,
 		}
 	}
 
@@ -92,18 +96,54 @@ impl R3000 {
 
 		self.check_tty_putchar();
 
+		if self.pc % 4 != 0 {
+			self.pending_exception = Some(Exception::AddrLoadError);
+		}
+
 		let instruction = bus.read32(self.pc);
 
-		let next_pc = match self.delayed_branch.take() {
-			Some(addr) => addr,
-			None => self.pc.wrapping_add(4),
+		let (next_pc, in_delay_slot) = match self.delayed_branch.take() {
+			Some(addr) => (addr, true),
+			None => (self.pc.wrapping_add(4), false),
 		};
+
+		// exceptions should be processed before executing the next instruction
+		if let Some(exception) = self.pending_exception.take() {
+			self.exception(exception, in_delay_slot);
+			return;
+		}
 
 		self.decode_and_exec(Instruction::from_u32(instruction), bus);
 
 		self.registers.process_delayed_loads();
 
 		self.pc = next_pc;
+
+	}
+
+	fn exception(&mut self, exception: Exception, in_delay_slot: bool) {
+
+		self.cop0.reg_epc = match in_delay_slot {
+			true => {self.cop0.reg_cause |= 1 << 31; self.pc.wrapping_sub(4)},
+			false => self.pc
+		};
+
+		// SR exception stack (3 user/mode entries)
+		// bits 5:0
+		let mode = self.cop0.reg_sr & 0x3F;
+		self.cop0.reg_sr &= !0x3F;
+		self.cop0.reg_sr = (mode << 2) & 0x3F;
+
+		// TODO: other cause fields
+		self.cop0.reg_cause = (exception as u32) << 2;
+
+		self.pc = match self.cop0.reg_sr & (1 << 22) != 0  {
+			true => 0xBFC00180,
+			false => 0x80000080,
+		};
+
+		self.delayed_branch = None;
+
 	}
 
 	fn check_tty_putchar(&self) {

@@ -1,15 +1,31 @@
+#![allow(dead_code)]
+
+#[derive(Debug)]
+pub enum Exception {
+	Interrupt = 0x00,
+	AddrLoadError = 0x04,
+	AddrStoreError = 0x05,
+	BusFetchError = 0x06,
+	BusLoadStoreError = 0x07,
+	Syscall = 0x08,
+	Breakpoint = 0x09,
+	ReservedInstruction = 0xA,
+	CopUnusable = 0xB,
+	ArithmeticOverflow = 0xC,
+}
+
 pub struct Cop0 {
-	reg_bpc: u32,		// Breakpoint on execute (R/W)
-	reg_bda: u32,		// Breakpoint on data access (R/W)
-	reg_jumpdest: u32,	// Randomly memorized jump address (R)
-	reg_dcic: u32,		// Breakpoint control (R/W)
-	reg_badvaddr: u32,	// Bad Virtual Address (R)
-	reg_bdam: u32,		// Data Access breakpoint mask (R/W)
-	reg_bpcm: u32,		// Execute breakpoint mask (R/W)
-	reg_sr: u32,		// System status register (R/W)
-	reg_cause: u32,		// Describes the most recently recognised exception (R)
-	reg_epc: u32,		// Return Address from Trap (R)
-	reg_prid: u32,		// Processor ID (R)
+	pub reg_bpc: u32,		// Breakpoint on execute (R/W)
+	pub reg_bda: u32,		// Breakpoint on data access (R/W)
+	pub reg_jumpdest: u32,	// Randomly memorized jump address (R)
+	pub reg_dcic: u32,		// Breakpoint control (R/W)
+	pub reg_badvaddr: u32,	// Bad Virtual Address (R)
+	pub reg_bdam: u32,		// Data Access breakpoint mask (R/W)
+	pub reg_bpcm: u32,		// Execute breakpoint mask (R/W)
+	pub reg_sr: u32,		// System status register (R/W)
+	pub reg_cause: u32,		// Describes the most recently recognised exception (R)
+	pub reg_epc: u32,		// Return Address from Trap (R)
+	pub reg_prid: u32,		// Processor ID (R)
 }
 
 impl Cop0 {

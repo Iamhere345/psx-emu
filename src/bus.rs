@@ -13,6 +13,9 @@ const IRQ_END: usize = IRQ_START + 8;
 const SPU_START: usize = 0x1F801C00;
 const SPU_END: usize = SPU_START + 0x280;
 
+const TIMERS_START: usize = 0x1F801100;
+const TIMERS_END: usize = 0x1F80112F;
+
 const EXPANSION1_START: usize = 0x1F000000;
 const EXPANSION1_END: usize = 0x1F080000;
 
@@ -55,10 +58,13 @@ impl Bus {
 			BIOS_START	..=	BIOS_END => self.bios[addr as usize - BIOS_START],
 			RAM_START	..= RAM_END => self.ram[addr as usize - RAM_START],
 
-			EXPANSION1_START	..= EXPANSION1_END => {println!("read to expansion 1 register 0x{:X}", unmasked_addr); 0xFF},
+			EXPANSION1_START	..= EXPANSION1_END => {/* println!("read to expansion 1 register 0x{:X}", unmasked_addr); */ 0xFF},
 
-			EXPANSION2_START	..= EXPANSION2_END => {println!("read to expansion 2 register 0x{:X}", unmasked_addr); 0},
-			SPU_START	..= SPU_END => {println!("read to SPU register 0x{:X}", unmasked_addr); 0},
+			EXPANSION2_START	..= EXPANSION2_END => {/* println!("read to expansion 2 register 0x{:X}", unmasked_addr); */ 0},
+			SPU_START	..= SPU_END => {/* println!("read to SPU register 0x{:X}", unmasked_addr); */ 0},
+			TIMERS_START	..= TIMERS_END => 0,
+
+			IRQ_START	..= IRQ_END => 0,
 			_ => panic!("unhandled read8 0x{:X}", addr)
 		}
 
@@ -83,10 +89,11 @@ impl Bus {
 		let addr = mask_addr(unmasked_addr);
 
 		match addr as usize {
-			RAM_START	..= RAM_END => self.ram[addr as usize - RAM_START] = write,
+			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START] = write,
 
-			SPU_START	..= SPU_END => println!("write to SPU register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
-			EXPANSION2_START	..= EXPANSION2_END => println!("write to expansion 2 register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
+			SPU_START			..= SPU_END => {},//println!("write to SPU register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
+			TIMERS_START		..= TIMERS_END => {},
+			EXPANSION2_START	..= EXPANSION2_END => {},//println!("write to expansion 2 register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
 			_ => panic!("unhandled write8 [0x{:X}] 0x{:X}", addr, write)
 		}
 	}
@@ -124,10 +131,10 @@ impl Bus {
 				match addr as usize - MEMCONTROL_START {
 					0 => if write != 0x1F000000 { panic!("write to expansion 1 base addr 0x{:X}", write) },
 					1 => if write != 0x1F802000 { panic!("write to expansion 2 base addr 0x{:X}", write) },
-					_ => println!("unhandled write to memcontrol [0x{:X}] 0x{:X}", addr as usize - MEMCONTROL_START, write),
+					_ => {}//println!("unhandled write to memcontrol [0x{:X}] 0x{:X}", addr as usize - MEMCONTROL_START, write),
 				}
 			}
-			IRQ_START			..= IRQ_END => println!("Unhandled write to IRQ register [0x{:X}] 0x{:X}", addr, write),
+			IRQ_START			..= IRQ_END => {},//println!("Unhandled write to IRQ register [0x{:X}] 0x{:X}", addr, write),
 			// io register RAM_SIZE
 			0x1F801060	..= 0x1F801064 => {}
 			// io register CACHE_CONTROL
