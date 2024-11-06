@@ -74,8 +74,7 @@ pub struct R3000 {
 	cop0: Cop0,
 
 	delayed_branch: Option<u32>,
-
-	pending_exception: Option<Exception>
+	in_delay_slot: bool,
 }
 
 impl R3000 {
@@ -87,8 +86,7 @@ impl R3000 {
 			cop0: Cop0::new(),
 
 			delayed_branch: None,
-
-			pending_exception: None,
+			in_delay_slot: false,
 		}
 	}
 
@@ -97,7 +95,10 @@ impl R3000 {
 		self.check_tty_putchar();
 
 		if self.pc % 4 != 0 {
-			self.pending_exception = Some(Exception::AddrLoadError);
+			self.exception(Exception::AddrLoadError);
+
+			self.registers.process_delayed_loads();
+			return;
 		}
 
 		let instruction = bus.read32(self.pc);
@@ -107,23 +108,22 @@ impl R3000 {
 			None => (self.pc.wrapping_add(4), false),
 		};
 
-		// exceptions should be processed before executing the next instruction
-		if let Some(exception) = self.pending_exception.take() {
-			self.exception(exception, in_delay_slot);
-			return;
-		}
-
+		self.in_delay_slot = in_delay_slot;
+		
 		self.decode_and_exec(Instruction::from_u32(instruction), bus);
-
+		
 		self.registers.process_delayed_loads();
 
 		self.pc = next_pc;
 
 	}
 
-	fn exception(&mut self, exception: Exception, in_delay_slot: bool) {
+	fn exception(&mut self, exception: Exception) {
 
-		self.cop0.reg_epc = match in_delay_slot {
+		// TODO: other cause fields
+		self.cop0.reg_cause = (exception as u32) << 2;
+
+		self.cop0.reg_epc = match self.in_delay_slot {
 			true => {self.cop0.reg_cause |= 1 << 31; self.pc.wrapping_sub(4)},
 			false => self.pc
 		};
@@ -133,9 +133,6 @@ impl R3000 {
 		let mode = self.cop0.reg_sr & 0x3F;
 		self.cop0.reg_sr &= !0x3F;
 		self.cop0.reg_sr = (mode << 2) & 0x3F;
-
-		// TODO: other cause fields
-		self.cop0.reg_cause = (exception as u32) << 2;
 
 		self.pc = match self.cop0.reg_sr & (1 << 22) != 0  {
 			true => 0xBFC00180,

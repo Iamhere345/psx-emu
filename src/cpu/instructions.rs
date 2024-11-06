@@ -66,7 +66,7 @@ impl R3000 {
 				0x03 => self.op_sra(instr),
 				0x08 => self.op_jr(instr),
 				0x09 => self.op_jalr(instr),
-				0x0C => self.op_syscall(instr),
+				0x0C => self.op_syscall(),
 				0x10 => self.op_mfhi(instr),
 				0x11 => self.op_mthi(instr),
 				0x12 => self.op_mflo(instr),
@@ -141,7 +141,7 @@ impl R3000 {
 		if addr % 4 == 0 {
 			bus.write32(addr, self.registers.read_gpr(instr.reg_tgt()));
 		} else {
-			self.pending_exception = Some(Exception::AddrStoreError);
+			self.exception(Exception::AddrStoreError);
 		}
 	}
 
@@ -158,7 +158,7 @@ impl R3000 {
 		if addr % 4 == 0 {
 			self.registers.write_gpr_delayed(instr.reg_tgt(), bus.read32(addr));
 		} else {
-			self.pending_exception = Some(Exception::AddrLoadError)
+			self.exception(Exception::AddrLoadError)
 		}
 	}
 
@@ -175,7 +175,7 @@ impl R3000 {
 		if addr % 2 == 0 {
 			bus.write16(addr, self.registers.read_gpr(instr.reg_tgt()) as u16);
 		} else {
-			self.pending_exception = Some(Exception::AddrStoreError);
+			self.exception(Exception::AddrStoreError);
 		}
 	}
 
@@ -278,7 +278,7 @@ impl R3000 {
 
 		let result = match src.checked_add(instr.imm16_se() as i32) {
 			Some(result) => result as u32,
-			None => { self.pending_exception = Some(Exception::ArithmeticOverflow); return }
+			None => { self.exception(Exception::ArithmeticOverflow); return }
 		};
 
 		self.registers.write_gpr(instr.reg_tgt(), result);
@@ -291,7 +291,7 @@ impl R3000 {
 
 		let result = match src.checked_add(self.registers.read_gpr(instr.reg_tgt()) as i32) {
 			Some(result) => result as u32,
-			None => { self.pending_exception = Some(Exception::ArithmeticOverflow); return }
+			None => { self.exception(Exception::ArithmeticOverflow); return }
 		};
 
 		self.registers.write_gpr(instr.reg_dst(), result);
@@ -456,8 +456,10 @@ impl R3000 {
 	}
 
 	// ? Trap Instructions
-	fn op_syscall(&mut self, instr: Instruction) {
-		self.pending_exception = Some(Exception::Syscall);
+	fn op_syscall(&mut self) {
+		//println!("[0x{:X}] SYSCALL $4=0x{:X}", self.pc, self.registers.read_gpr(4));
+
+		self.exception(Exception::Syscall);
 	}
 
 	// ? Cop0 Instructions

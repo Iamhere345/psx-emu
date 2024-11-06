@@ -106,8 +106,17 @@ impl Bus {
 
 		let [lsb, msb] = write.to_le_bytes();
 
-		self.write8(unmasked_addr, lsb);
-		self.write8(unmasked_addr + 1, msb);
+		let addr = mask_addr(unmasked_addr);
+
+		match addr as usize {
+			SPU_START		..=	SPU_END => {}
+			TIMERS_START	..= TIMERS_END => {}
+			RAM_START		..= RAM_END => {
+				self.write8(unmasked_addr, lsb);
+				self.write8(unmasked_addr + 1, msb);
+			}
+			_ => panic!("[0x{:X}] write16 0x{:X}", unmasked_addr, write),
+		}	
 
 	}
 
