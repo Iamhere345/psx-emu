@@ -16,6 +16,12 @@ const SPU_END: usize = SPU_START + 0x280;
 const TIMERS_START: usize = 0x1F801100;
 const TIMERS_END: usize = 0x1F80112F;
 
+const DMA_START: usize = 0x1F801080;
+const DMA_END: usize = DMA_START + 0x80 - 1;
+
+const GPU_START: usize = 0x1F801810;
+const GPU_END: usize = 0x1F801814;
+
 const EXPANSION1_START: usize = 0x1F000000;
 const EXPANSION1_END: usize = 0x1F080000;
 
@@ -55,17 +61,37 @@ impl Bus {
 		let addr = mask_addr(unmasked_addr);
 
 		match addr as usize {
-			BIOS_START	..=	BIOS_END => self.bios[addr as usize - BIOS_START],
-			RAM_START	..= RAM_END => self.ram[addr as usize - RAM_START],
+			BIOS_START			..=	BIOS_END => self.bios[addr as usize - BIOS_START],
+			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START],
 
 			EXPANSION1_START	..= EXPANSION1_END => {/* println!("read to expansion 1 register 0x{:X}", unmasked_addr); */ 0xFF},
-
 			EXPANSION2_START	..= EXPANSION2_END => {/* println!("read to expansion 2 register 0x{:X}", unmasked_addr); */ 0},
-			SPU_START	..= SPU_END => {/* println!("read to SPU register 0x{:X}", unmasked_addr); */ 0},
-			TIMERS_START	..= TIMERS_END => 0,
 
-			IRQ_START	..= IRQ_END => 0,
+			SPU_START			..= SPU_END => {/* println!("read to SPU register 0x{:X}", unmasked_addr); */ 0},
+			DMA_START			..= DMA_END => 0,
+			TIMERS_START		..= TIMERS_END => 0,
+			IRQ_START			..= IRQ_END => 0,
+			GPU_START			..= GPU_END => 0,
+
 			_ => panic!("unhandled read8 0x{:X}", addr)
+		}
+
+	}
+
+	pub fn read16(&self, unmasked_addr: u32) -> u16 {
+
+		let addr = mask_addr(unmasked_addr);
+
+		match addr as usize {
+			RAM_START	..= RAM_END => u16::from_le_bytes([
+				self.read8(unmasked_addr),
+				self.read8(unmasked_addr + 1)
+			]),
+			
+			IRQ_START	..= IRQ_END => 0,
+			SPU_START	..= SPU_END => 0,
+
+			_ => panic!("unhandled read16 0x{:X}", addr),
 		}
 
 	}
@@ -76,12 +102,21 @@ impl Bus {
 			panic!("unaligned 32 bit read at addr 0x{:X}", addr);
 		}
 
-		u32::from_le_bytes([
-			self.read8(addr),
-			self.read8(addr + 1),
-			self.read8(addr + 2),
-			self.read8(addr + 3),
-		])
+		let masked_addr = mask_addr(addr);
+
+		match masked_addr as usize {
+			GPU_START	..= GPU_END => match masked_addr {
+				0x1F801814 => 0x10000000,	// hardcode GPUSTAT to ready to receive DMA blocks
+				_ => 0,
+			},
+			_ => u32::from_le_bytes([
+				self.read8(addr),
+				self.read8(addr + 1),
+				self.read8(addr + 2),
+				self.read8(addr + 3),
+			])
+		}
+		
 	}
 
 	pub fn write8(&mut self, unmasked_addr: u32, write: u8) {
@@ -109,6 +144,7 @@ impl Bus {
 		let addr = mask_addr(unmasked_addr);
 
 		match addr as usize {
+			IRQ_START		..= IRQ_END => {}
 			SPU_START		..=	SPU_END => {}
 			TIMERS_START	..= TIMERS_END => {}
 			RAM_START		..= RAM_END => {
@@ -144,10 +180,14 @@ impl Bus {
 				}
 			}
 			IRQ_START			..= IRQ_END => {},//println!("Unhandled write to IRQ register [0x{:X}] 0x{:X}", addr, write),
+			TIMERS_START		..= TIMERS_END => {},
 			// io register RAM_SIZE
-			0x1F801060	..= 0x1F801064 => {}
+			0x1F801060	..= 0x1F801064 => {},
 			// io register CACHE_CONTROL
-			0xFFFE0130	..= 0xFFFE0134 => {}
+			0xFFFE0130	..= 0xFFFE0134 => {},
+			DMA_START	..= DMA_END => {},
+			GPU_START	..= GPU_END => {},
+
 			_ => panic!("unhandled write32 [0x{:X}/0x{:X}] 0x{:X}", addr, unmasked_addr, write)
 		}
 

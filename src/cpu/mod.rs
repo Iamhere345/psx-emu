@@ -31,6 +31,11 @@ impl Registers {
 	pub fn read_gpr(&self, register: u32) -> u32 {
 		self.gpr[register as usize]
 	}
+
+	pub fn read_gpr_lwl_lwr(&mut self, register: u32) -> u32 {
+		let (delayed_reg, delayed_val) = self.delayed_load;
+		if register == delayed_reg { delayed_val } else { self.gpr[register as usize] }
+	}
 	
 	pub fn write_gpr(&mut self, register: u32, write: u32) {
 		if register == 0 {

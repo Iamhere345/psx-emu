@@ -1,3 +1,5 @@
+use std::f32::consts::E;
+
 use crate::bus::Bus;
 
 use super::{Exception, R3000};
@@ -64,24 +66,33 @@ impl R3000 {
 				0x00 => self.op_sll(instr),
 				0x02 => self.op_srl(instr),
 				0x03 => self.op_sra(instr),
+				0x04 => self.op_sllv(instr),
+				0x06 => self.op_srlv(instr),
+				0x07 => self.op_srav(instr),
 				0x08 => self.op_jr(instr),
 				0x09 => self.op_jalr(instr),
 				0x0C => self.op_syscall(),
+				0x0D => self.op_break(),
 				0x10 => self.op_mfhi(instr),
 				0x11 => self.op_mthi(instr),
 				0x12 => self.op_mflo(instr),
 				0x13 => self.op_mtlo(instr),
+				0x18 => self.op_mult(instr),
+				0x19 => self.op_multu(instr),
 				0x1A => self.op_div(instr),
 				0x1B => self.op_divu(instr),
 				0x20 => self.op_add(instr),
 				0x21 => self.op_addu(instr),
+				0x22 => self.op_sub(instr),
 				0x23 => self.op_subu(instr),
 				0x24 => self.op_and(instr),
 				0x25 => self.op_or(instr),
+				0x26 => self.op_xor(instr),
+				0x27 => self.op_nor(instr),
 				0x2A => self.op_slt(instr),
 				0x2B => self.op_sltu(instr),
 
-				_ => panic!("Unimplemented secondary opcode: 0x{:X} (PC: 0x{:X}) (funct: 0x{:X})", instr.raw, self.pc, instr.funct()),
+				_ => self.op_illegal(instr),
 			}
 
 			0x01 => self.op_bcondz(instr),
@@ -98,23 +109,43 @@ impl R3000 {
 			0x0B => self.op_sltiu(instr),
 			0x0C => self.op_andi(instr),
 			0x0D => self.op_ori(instr),
+			0x0E => self.op_xori(instr),
 			0x0F => self.op_lui(instr),
 
 			0x10 => match instr.cop0_opcode() {
 				0x00 => self.op_mfc(instr),
 				0x04 => self.op_mtc(instr),
 				0x10 => self.op_rfe(instr),
-				_ => panic!("Unimplemented cop0 opcode 0x{:X} (PC: 0x{:X}) (cop0_opcode: 0b{:b}/0x{:X})", instr.raw, self.pc, instr.cop0_opcode(), instr.cop0_opcode()),
+				_ => self.op_illegal(instr),
 			}
 
+			0x11 => self.op_copn(),
+			0x12 => self.op_gte(instr),
+			0x13 => self.op_copn(),
+
 			0x20 => self.op_lb(instr, bus),
+			0x21 => self.op_lh(instr, bus),
+			0x22 => self.op_lwl(instr, bus),
 			0x23 => self.op_lw(instr, bus),
 			0x24 => self.op_lbu(instr, bus),
+			0x25 => self.op_lhu(instr, bus),
+			0x26 => self.op_lwr(instr, bus),
 			0x28 => self.op_sb(instr, bus),
 			0x29 => self.op_sh(instr, bus),
+			0x2A => self.op_swl(instr, bus),
 			0x2B => self.op_sw(instr, bus),
+			0x2E => self.op_swr(instr, bus),
 
-			_ => panic!("Unimplemented opcode: 0x{:X} (PC: 0x{:X}) (Opcode: 0x{:X})", instr.raw, self.pc, instr.opcode()),
+			0x30 => self.op_lwcn(),
+			0x31 => self.op_lwcn(),
+			0x32 => self.op_lwc_gte(instr),
+			0x33 => self.op_lwcn(),
+			0x38 => self.op_swcn(),
+			0x39 => self.op_swcn(),
+			0x3A => self.op_swc_gte(instr),
+			0x3B => self.op_swcn(),
+
+			_ => self.op_illegal(instr),
 		}
 
 	}
@@ -179,6 +210,27 @@ impl R3000 {
 		}
 	}
 
+	fn op_lh(&mut self, instr: Instruction, bus: &mut Bus) {
+		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
+
+		if addr % 2 == 0 {
+			let new_val = bus.read16(addr) as i16;
+			self.registers.write_gpr_delayed(instr.reg_tgt(), new_val as u32);
+		} else {
+			self.exception(Exception::AddrLoadError);
+		}
+	}
+
+	fn op_lhu(&mut self, instr: Instruction, bus: &mut Bus) {
+		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
+
+		if addr % 2 == 0 {
+			self.registers.write_gpr_delayed(instr.reg_tgt(), bus.read16(addr) as u32);
+		} else {
+			self.exception(Exception::AddrLoadError);
+		}
+	}
+
 	fn op_sb(&mut self, instr: Instruction, bus: &mut Bus) {
 
 		if self.cop0.read_reg(12) & 0x10000 != 0 {
@@ -212,6 +264,86 @@ impl R3000 {
 		self.registers.write_gpr_delayed(instr.reg_tgt(), value as u32);
 	}
 
+	fn op_lwl(&mut self, instr: Instruction, bus: &mut Bus) {
+
+		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
+
+		let current_val = self.registers.read_gpr_lwl_lwr(instr.reg_tgt());
+
+		let aligned_addr = addr & !0x3;
+		let aligned_word = bus.read32(aligned_addr);
+
+		let value = match addr & 0x3 {
+			0 => (current_val & 0x00FFFFFF) | (aligned_word << 24),
+			1 => (current_val & 0x0000FFFF) | (aligned_word << 16),
+			2 => (current_val & 0x000000FF) | (aligned_word << 8),
+			3 => (current_val & 0x00000000) | (aligned_word << 0),
+			_ => unreachable!()
+		};
+
+		self.registers.write_gpr_delayed(instr.reg_tgt(), value);
+	}
+
+	fn op_lwr(&mut self, instr: Instruction, bus: &mut Bus) {
+
+		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
+
+		let current_val = self.registers.read_gpr_lwl_lwr(instr.reg_tgt());
+
+		let aligned_addr = addr & !0x3;
+		let aligned_word = bus.read32(aligned_addr);
+
+		let value = match addr & 0x3 {
+			0 => (current_val & 0x00000000) | (aligned_word >> 0),
+			1 => (current_val & 0xFF000000) | (aligned_word >> 8),
+			2 => (current_val & 0xFFFF0000) | (aligned_word >> 16),
+			3 => (current_val & 0xFFFFFF00) | (aligned_word >> 24),
+			_ => unreachable!()
+		};
+
+		self.registers.write_gpr_delayed(instr.reg_tgt(), value);
+	}
+
+	fn op_swl(&mut self, instr: Instruction, bus: &mut Bus) {
+
+		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
+
+		let reg_val = self.registers.read_gpr(instr.reg_tgt());
+
+		let aligned_addr = addr & !0x3;
+		let current_mem = bus.read32(aligned_addr);
+
+		let value = match addr & 0x3 {
+			0 => (current_mem & 0xFFFFFF00) | (reg_val >> 24),
+			1 => (current_mem & 0xFFFF0000) | (reg_val >> 16),
+			2 => (current_mem & 0xFF000000) | (reg_val >> 8),
+			3 => (current_mem & 0x00000000) | (reg_val >> 0),
+			_ => unreachable!()
+		};
+
+		self.registers.write_gpr_delayed(instr.reg_tgt(), value);
+	}
+
+	fn op_swr(&mut self, instr: Instruction, bus: &mut Bus) {
+
+		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
+
+		let reg_val = self.registers.read_gpr(instr.reg_tgt());
+
+		let aligned_addr = addr & !0x3;
+		let current_mem = bus.read32(aligned_addr);
+
+		let value = match addr & 0x3 {
+			0 => (current_mem & 0x00000000) | (reg_val << 0),
+			1 => (current_mem & 0x000000FF) | (reg_val << 8),
+			2 => (current_mem & 0x0000FFFF) | (reg_val << 16),
+			3 => (current_mem & 0x00FFFFFF) | (reg_val << 24),
+			_ => unreachable!()
+		};
+
+		self.registers.write_gpr_delayed(instr.reg_tgt(), value);
+	}
+
 	fn op_mfhi(&mut self, instr: Instruction) {
 		self.registers.write_gpr(instr.reg_dst(), self.registers.hi);
 	}
@@ -241,6 +373,24 @@ impl R3000 {
 		self.registers.write_gpr(instr.reg_dst(), result);
 	}
 
+	fn op_xor(&mut self, instr: Instruction) {
+		let result = self.registers.read_gpr(instr.reg_src()) ^ self.registers.read_gpr(instr.reg_tgt());
+
+		self.registers.write_gpr(instr.reg_dst(), result);
+	}
+
+	fn op_xori(&mut self, instr: Instruction) {
+		let result = self.registers.read_gpr(instr.reg_src()) ^ instr.imm16();
+
+		self.registers.write_gpr(instr.reg_tgt(), result);
+	}
+
+	fn op_nor(&mut self, instr: Instruction) {
+		let result = !(self.registers.read_gpr(instr.reg_src()) | self.registers.read_gpr(instr.reg_tgt()));
+
+		self.registers.write_gpr(instr.reg_dst(), result);
+	}
+
 	fn op_andi(&mut self, instr: Instruction) {
 		let result = self.registers.read_gpr(instr.reg_src()) & instr.imm16();
 
@@ -251,12 +401,6 @@ impl R3000 {
 		let result = self.registers.read_gpr(instr.reg_src()) & self.registers.read_gpr(instr.reg_tgt());
 
 		self.registers.write_gpr(instr.reg_dst(), result);
-	}
-
-	fn op_sra(&mut self, instr: Instruction) {
-		let result = (self.registers.read_gpr(instr.reg_tgt()) as i32) >> instr.shamt();
-
-		self.registers.write_gpr(instr.reg_dst(), result as u32);
 	}
 
 	// ? Arithmetic Instructions
@@ -296,6 +440,16 @@ impl R3000 {
 
 		self.registers.write_gpr(instr.reg_dst(), result);
 
+	}
+
+	fn op_sub(&mut self, instr: Instruction) {
+		let src = self.registers.read_gpr(instr.reg_src()) as i32;
+		let tgt = self.registers.read_gpr(instr.reg_tgt()) as i32;
+
+		match src.checked_sub(tgt) {
+			Some(result) => self.registers.write_gpr(instr.reg_dst(), result as u32),
+			None => self.exception(Exception::ArithmeticOverflow),
+		}
 	}
 
 	fn op_subu(&mut self, instr: Instruction) {
@@ -371,6 +525,26 @@ impl R3000 {
 		}
 	}
 
+	fn op_mult(&mut self, instr: Instruction) {
+		let multiplicand = (self.registers.read_gpr(instr.reg_src()) as i32) as i64;
+		let multiplier = (self.registers.read_gpr(instr.reg_tgt()) as i32) as i64;
+
+		let product = (multiplicand * multiplier) as u64;
+
+		self.registers.hi = (product >> 32) as u32;
+		self.registers.lo = product as u32;
+	}
+
+	fn op_multu(&mut self, instr: Instruction) {
+		let multiplicand = self.registers.read_gpr(instr.reg_src()) as u64;
+		let multiplier = self.registers.read_gpr(instr.reg_tgt()) as u64;
+
+		let product = multiplicand * multiplier;
+
+		self.registers.hi = (product >> 32) as u32;
+		self.registers.lo = product as u32;
+	}
+
 	// ? Shift Instructions
 	fn op_sll(&mut self, instr: Instruction) {
 		let new_val = self.registers.read_gpr(instr.reg_tgt()) << instr.shamt();
@@ -378,10 +552,37 @@ impl R3000 {
 		self.registers.write_gpr(instr.reg_dst(), new_val);
 	}
 
+	fn op_sllv(&mut self, instr: Instruction) {
+		let shamt = instr.reg_src() & 0x1F;
+		let new_val = self.registers.read_gpr(instr.reg_tgt()) << shamt;
+		
+		self.registers.write_gpr(instr.reg_dst(), new_val);
+	}
+
 	fn op_srl(&mut self, instr: Instruction) {
 		let new_val = self.registers.read_gpr(instr.reg_tgt()) >> instr.shamt();
 
 		self.registers.write_gpr(instr.reg_dst(), new_val);
+	}
+
+	fn op_srlv(&mut self, instr: Instruction) {
+		let shamt = instr.reg_src() & 0x1F;
+		let new_val = self.registers.read_gpr(instr.reg_tgt()) >> shamt;
+
+		self.registers.write_gpr(instr.reg_dst(), new_val);
+	}
+
+	fn op_sra(&mut self, instr: Instruction) {
+		let result = (self.registers.read_gpr(instr.reg_tgt()) as i32) >> instr.shamt();
+
+		self.registers.write_gpr(instr.reg_dst(), result as u32);
+	}
+
+	fn op_srav(&mut self, instr: Instruction) {
+		let shamt = instr.reg_src() & 0x1F;
+		let result = (self.registers.read_gpr(instr.reg_tgt()) as i32) >> shamt;
+
+		self.registers.write_gpr(instr.reg_dst(), result as u32);
 	}
 
 
@@ -462,6 +663,16 @@ impl R3000 {
 		self.exception(Exception::Syscall);
 	}
 
+	fn op_break(&mut self) {
+		self.exception(Exception::Breakpoint);
+	}
+
+	fn op_illegal(&mut self, instr: Instruction) {
+		println!("Illegal instruction 0x{:X} (PC: 0x{:X}) (opcode: 0x{:X} funct: 0x{:X} cop0 opcode: 0x{:X})", instr.raw, self.pc, instr.opcode(), instr.funct(), instr.cop0_opcode());
+
+		self.exception(Exception::ReservedInstruction);
+	}
+
 	// ? Cop0 Instructions
 	fn op_mfc(&mut self, instr: Instruction) {
 		let value = self.cop0.read_reg(instr.reg_dst());
@@ -483,6 +694,31 @@ impl R3000 {
 		self.cop0.reg_sr &= !0x3F;
 		self.cop0.reg_sr |= mode >> 2;
 
+	}
+
+	// ? Coprocessor Instructions
+	fn op_copn(&mut self) {
+		self.exception(Exception::CopUnusable);
+	}
+
+	fn op_gte(&mut self, instr: Instruction) {
+		panic!("Unhandled GTE instruction: 0x{:X}", instr.raw);
+	}
+
+	fn op_lwcn(&mut self) {
+		self.exception(Exception::CopUnusable);
+	}
+
+	fn op_lwc_gte(&mut self, instr: Instruction) {
+		panic!("Unhandled GTE LWC: 0x{:X}", instr.raw);
+	}
+
+	fn op_swcn(&mut self) {
+		self.exception(Exception::CopUnusable);
+	}
+
+	fn op_swc_gte(&mut self, instr: Instruction) {
+		panic!("Unhandled GTE SWC: 0x{:X}", instr.raw);
 	}
 
 }
