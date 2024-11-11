@@ -7,7 +7,8 @@ use instructions::Instruction;
 mod instructions;
 mod cop0;
 
-struct Registers {
+#[derive(Debug)]
+pub struct Registers {
 	gpr: [u32; 32],
 	hi: u32,
 	lo: u32,
@@ -73,13 +74,15 @@ impl Registers {
 }
 
 pub struct R3000 {
-	registers: Registers,
-	pc: u32,
+	pub registers: Registers,
+	pub pc: u32,
 
 	cop0: Cop0,
 
 	delayed_branch: Option<u32>,
 	in_delay_slot: bool,
+	pub debug: bool,
+	exception: bool,
 }
 
 impl R3000 {
@@ -92,6 +95,8 @@ impl R3000 {
 
 			delayed_branch: None,
 			in_delay_slot: false,
+			debug: false,
+			exception: false,
 		}
 	}
 
@@ -113,13 +118,21 @@ impl R3000 {
 			None => (self.pc.wrapping_add(4), false),
 		};
 
+		if self.debug {
+			println!("[0x{:X}] {}", self.pc, self.dissasemble(Instruction::from_u32(instruction)));
+		}
+
 		self.in_delay_slot = in_delay_slot;
 		
 		self.decode_and_exec(Instruction::from_u32(instruction), bus);
 		
 		self.registers.process_delayed_loads();
 
-		self.pc = next_pc;
+		if !self.exception {
+			self.pc = next_pc;
+		} else {
+			self.exception = false;
+		}
 
 	}
 
@@ -127,6 +140,7 @@ impl R3000 {
 
 		// TODO: other cause fields
 		self.cop0.reg_cause = (exception as u32) << 2;
+		//println!("exception: {:?} 0x{:X} cause: 0x{:b}", exception, exception as u32, self.cop0.reg_cause);
 
 		self.cop0.reg_epc = match self.in_delay_slot {
 			true => {self.cop0.reg_cause |= 1 << 31; self.pc.wrapping_sub(4)},
@@ -145,6 +159,7 @@ impl R3000 {
 		};
 
 		self.delayed_branch = None;
+		self.exception = true;
 
 	}
 

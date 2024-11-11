@@ -4,6 +4,9 @@ const BIOS_END: usize = BIOS_START + (512 * 1024);
 const RAM_START: usize = 0x0;
 const RAM_END: usize = RAM_START + (2048 * 1024);
 
+const SCRATCHPAD_START: usize = 0x1F800000;
+const SCRATCHPAD_END: usize = 0x1F8003FF;
+
 const MEMCONTROL_START: usize = 0x1F801000;
 const MEMCONTROL_END: usize = 0x1F801000 + 36;
 
@@ -41,7 +44,8 @@ const REGION_MASK: [u32; 8] = [
 
 pub struct Bus {
 	bios: Vec<u8>,
-	ram: Vec<u8>,
+	pub ram: Vec<u8>,
+	scratchpad: Vec<u8>,
 }
 
 fn mask_addr(addr: u32) -> u32 {
@@ -53,6 +57,7 @@ impl Bus {
 		Self {
 			bios: bios,
 			ram: vec![0xF0; 2048 * 1024],
+			scratchpad: vec![0xF0; 1024],
 		}
 	}
 
@@ -63,11 +68,12 @@ impl Bus {
 		match addr as usize {
 			BIOS_START			..=	BIOS_END => self.bios[addr as usize - BIOS_START],
 			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START],
+			SCRATCHPAD_START	..SCRATCHPAD_END => self.scratchpad[addr as usize - SCRATCHPAD_START],
 
-			EXPANSION1_START	..= EXPANSION1_END => {/* println!("read to expansion 1 register 0x{:X}", unmasked_addr); */ 0xFF},
-			EXPANSION2_START	..= EXPANSION2_END => {/* println!("read to expansion 2 register 0x{:X}", unmasked_addr); */ 0},
+			EXPANSION1_START	..= EXPANSION1_END => {println!("read to expansion 1 register 0x{:X}", unmasked_addr); 0xFF},
+			EXPANSION2_START	..= EXPANSION2_END => {println!("read to expansion 2 register 0x{:X}", unmasked_addr); 0},
 
-			SPU_START			..= SPU_END => {/* println!("read to SPU register 0x{:X}", unmasked_addr); */ 0},
+			SPU_START			..= SPU_END => {println!("read to SPU register 0x{:X}", unmasked_addr); 0},
 			DMA_START			..= DMA_END => 0,
 			TIMERS_START		..= TIMERS_END => 0,
 			IRQ_START			..= IRQ_END => 0,
@@ -84,6 +90,10 @@ impl Bus {
 
 		match addr as usize {
 			RAM_START	..= RAM_END => u16::from_le_bytes([
+				self.read8(unmasked_addr),
+				self.read8(unmasked_addr + 1)
+			]),
+			SCRATCHPAD_START	..= SCRATCHPAD_END => u16::from_le_bytes([
 				self.read8(unmasked_addr),
 				self.read8(unmasked_addr + 1)
 			]),
@@ -106,7 +116,7 @@ impl Bus {
 
 		match masked_addr as usize {
 			GPU_START	..= GPU_END => match masked_addr {
-				0x1F801814 => 0x10000000,	// hardcode GPUSTAT to ready to receive DMA blocks
+				0x1F801814 => 0b01011110100000000000000000000000,	// hardcode GPUSTAT
 				_ => 0,
 			},
 			_ => u32::from_le_bytes([
@@ -125,10 +135,11 @@ impl Bus {
 
 		match addr as usize {
 			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START] = write,
+			SCRATCHPAD_START	..= SCRATCHPAD_END => self.scratchpad[addr as usize -  SCRATCHPAD_START] = write,
 
-			SPU_START			..= SPU_END => {},//println!("write to SPU register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
+			SPU_START			..= SPU_END => println!("write to SPU register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
 			TIMERS_START		..= TIMERS_END => {},
-			EXPANSION2_START	..= EXPANSION2_END => {},//println!("write to expansion 2 register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
+			EXPANSION2_START	..= EXPANSION2_END => println!("write to expansion 2 register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
 			_ => panic!("unhandled write8 [0x{:X}] 0x{:X}", addr, write)
 		}
 	}
@@ -148,6 +159,10 @@ impl Bus {
 			SPU_START		..=	SPU_END => {}
 			TIMERS_START	..= TIMERS_END => {}
 			RAM_START		..= RAM_END => {
+				self.write8(unmasked_addr, lsb);
+				self.write8(unmasked_addr + 1, msb);
+			}
+			SCRATCHPAD_START		..= SCRATCHPAD_END => {
 				self.write8(unmasked_addr, lsb);
 				self.write8(unmasked_addr + 1, msb);
 			}
@@ -171,6 +186,12 @@ impl Bus {
 				self.write8(addr + 2, (write >> 16) as u8);
 				self.write8(addr + 3, (write >> 24) as u8);
 			},
+			SCRATCHPAD_START			..= SCRATCHPAD_END => {
+				self.write8(addr + 0, (write >> 0) as u8);
+				self.write8(addr + 1, (write >> 8) as u8);
+				self.write8(addr + 2, (write >> 16) as u8);
+				self.write8(addr + 3, (write >> 24) as u8);
+			},
 
 			MEMCONTROL_START	..=	MEMCONTROL_END => {
 				match addr as usize - MEMCONTROL_START {
@@ -179,7 +200,7 @@ impl Bus {
 					_ => {}//println!("unhandled write to memcontrol [0x{:X}] 0x{:X}", addr as usize - MEMCONTROL_START, write),
 				}
 			}
-			IRQ_START			..= IRQ_END => {},//println!("Unhandled write to IRQ register [0x{:X}] 0x{:X}", addr, write),
+			IRQ_START			..= IRQ_END => println!("Unhandled write to IRQ register [0x{:X}] 0x{:X}", addr, write),
 			TIMERS_START		..= TIMERS_END => {},
 			// io register RAM_SIZE
 			0x1F801060	..= 0x1F801064 => {},

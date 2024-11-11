@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Exception {
 	Interrupt = 0x00,
 	AddrLoadError = 0x04,

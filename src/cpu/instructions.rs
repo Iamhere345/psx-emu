@@ -1,9 +1,8 @@
-use std::f32::consts::E;
-
 use crate::bus::Bus;
 
 use super::{Exception, R3000};
 
+#[derive(Clone, Copy)]
 pub struct Instruction {
 	raw: u32,
 }
@@ -146,6 +145,98 @@ impl R3000 {
 			0x3B => self.op_swcn(),
 
 			_ => self.op_illegal(instr),
+		}
+
+	}
+
+	pub fn dissasemble(&self, instr: Instruction) -> String {
+
+		match instr.opcode() {
+
+			0x00 => match instr.funct() {
+				0x00 => format!("sll ${}, ${}, {}", instr.reg_dst(), instr.reg_tgt(), instr.shamt()),
+				0x02 => "srl".to_string(),
+				0x03 => "sra".to_string(),
+				0x04 => "sllv".to_string(),
+				0x06 => "srlv".to_string(),
+				0x07 => "srav".to_string(),
+				0x08 => "jr".to_string(),
+				0x09 => "jalr".to_string(),
+				0x0C => "syscall".to_string(),
+				0x0D => "break".to_string(),
+				0x10 => "mfhi".to_string(),
+				0x11 => "mthi".to_string(),
+				0x12 => "mflo".to_string(),
+				0x13 => "mtlo".to_string(),
+				0x18 => "mult".to_string(),
+				0x19 => "multu".to_string(),
+				0x1A => "div".to_string(),
+				0x1B => "divu".to_string(),
+				0x20 => "add".to_string(),
+				0x21 => "addu".to_string(),
+				0x22 => "sub".to_string(),
+				0x23 => "subu".to_string(),
+				0x24 => format!("and ${}, ${}, ${}", instr.reg_dst(), instr.reg_src(), instr.reg_tgt()),
+				0x25 => "or".to_string(),
+				0x26 => "xor".to_string(),
+				0x27 => "nor".to_string(),
+				0x2A => "slt".to_string(),
+				0x2B => format!("sltu ${}, ${}, ${}", instr.reg_dst(), instr.reg_src(), instr.reg_tgt()),
+
+				_ => "illegal".to_string(),
+			}
+
+			0x01 => "bcondz".to_string(),
+
+			0x02 => "j".to_string(),
+			0x03 => "jal".to_string(),
+			0x04 => format!("beq ${}, ${}, 0x{:X}", instr.reg_src(), instr.reg_tgt(), instr.imm16_se() << 2),
+			0x05 => format!("bne ${}, ${}, 0x{:X}", instr.reg_src(), instr.reg_tgt(), instr.imm16_se() << 2),
+			0x06 => "blez".to_string(),
+			0x07 => "bgtz".to_string(),
+			0x08 => "addi".to_string(),
+			0x09 => format!("addiu ${}, ${}, 0x{:X}", instr.reg_tgt(), instr.reg_src(), instr.imm16_se()),
+			0x0A => "slti".to_string(),
+			0x0B => "sltiu".to_string(),
+			0x0C => "andi".to_string(),
+			0x0D => "ori".to_string(),
+			0x0E => "xori".to_string(),
+			0x0F => "lui".to_string(),
+
+			0x10 => match instr.cop0_opcode() {
+				0x00 => "mfc".to_string(),
+				0x04 => "mtc".to_string(),
+				0x10 => "rfe".to_string(),
+				_ => "illegal".to_string(),
+			}
+
+			0x11 => "copn".to_string(),
+			0x12 => "gte".to_string(),
+			0x13 => "copn".to_string(),
+
+			0x20 => "lb".to_string(),
+			0x21 => "lh".to_string(),
+			0x22 => "lwl".to_string(),
+			0x23 => format!("lw ${}, 0x{:X}(${})", instr.reg_tgt(), instr.imm16_se(), instr.reg_src()),
+			0x24 => "lbu".to_string(),
+			0x25 => "lhu".to_string(),
+			0x26 => "lwr".to_string(),
+			0x28 => format!("sb ${}, 0x{:X}(${})", instr.reg_dst(), instr.imm16(), instr.reg_src()),
+			0x29 => "sh".to_string(),
+			0x2A => "swl".to_string(),
+			0x2B => "sw".to_string(),
+			0x2E => "swr".to_string(),
+
+			0x30 => "lwcn".to_string(),
+			0x31 => "lwcn".to_string(),
+			0x32 => "lwc_gte".to_string(),
+			0x33 => "lwcn".to_string(),
+			0x38 => "swcn".to_string(),
+			0x39 => "swcn".to_string(),
+			0x3A => "swc_gte".to_string(),
+			0x3B => "swcn".to_string(),
+
+			_ => "illegal".to_string(),
 		}
 
 	}
