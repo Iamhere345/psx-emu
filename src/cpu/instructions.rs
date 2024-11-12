@@ -584,12 +584,8 @@ impl R3000 {
 		// divide by zero has special values for HI/LO
 		if denominator == 0 {
 			self.registers.hi = numerator as u32;
-
-			if denominator >= 0 {
-				self.registers.lo = 0xFFFFFFFF; // -1
-			} else {
-				self.registers.lo = 1;
-			}
+			self.registers.lo = if numerator < 0 { 1 } else { 0xFFFFFFFF };
+			
 		} else if numerator as u32 == 0x80000000 && denominator == -1 {
 			// result is outside of i32 range
 			self.registers.hi = 0;
@@ -644,7 +640,7 @@ impl R3000 {
 	}
 
 	fn op_sllv(&mut self, instr: Instruction) {
-		let shamt = instr.reg_src() & 0x1F;
+		let shamt = self.registers.read_gpr(instr.reg_src()) & 0x1F;
 		let new_val = self.registers.read_gpr(instr.reg_tgt()) << shamt;
 		
 		self.registers.write_gpr(instr.reg_dst(), new_val);
@@ -657,7 +653,7 @@ impl R3000 {
 	}
 
 	fn op_srlv(&mut self, instr: Instruction) {
-		let shamt = instr.reg_src() & 0x1F;
+		let shamt = self.registers.read_gpr(instr.reg_src()) & 0x1F;
 		let new_val = self.registers.read_gpr(instr.reg_tgt()) >> shamt;
 
 		self.registers.write_gpr(instr.reg_dst(), new_val);
@@ -670,7 +666,7 @@ impl R3000 {
 	}
 
 	fn op_srav(&mut self, instr: Instruction) {
-		let shamt = instr.reg_src() & 0x1F;
+		let shamt = self.registers.read_gpr(instr.reg_src()) & 0x1F;
 		let result = (self.registers.read_gpr(instr.reg_tgt()) as i32) >> shamt;
 
 		self.registers.write_gpr(instr.reg_dst(), result as u32);
