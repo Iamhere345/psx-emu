@@ -65,6 +65,11 @@ impl Cop0 {
 	}
 
 	pub fn write_reg(&mut self, reg_index: u32, write: u32) {
+		
+		if reg_index == 12 {
+			//println!("write 0x{:X}", write);
+		}
+
 		match reg_index {
 			3 => self.reg_bpc = write,
 			5 => self.reg_bda = write,

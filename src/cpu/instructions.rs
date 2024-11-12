@@ -412,7 +412,7 @@ impl R3000 {
 			_ => unreachable!()
 		};
 
-		self.registers.write_gpr_delayed(instr.reg_tgt(), value);
+		bus.write32(aligned_addr, value);
 	}
 
 	fn op_swr(&mut self, instr: Instruction, bus: &mut Bus) {
@@ -432,7 +432,7 @@ impl R3000 {
 			_ => unreachable!()
 		};
 
-		self.registers.write_gpr_delayed(instr.reg_tgt(), value);
+		bus.write32(aligned_addr, value);
 	}
 
 	fn op_mfhi(&mut self, instr: Instruction) {
@@ -778,7 +778,7 @@ impl R3000 {
 		}
 
 		let mode = self.cop0.reg_sr & 0x3F;
-		self.cop0.reg_sr &= !0x3F;
+		self.cop0.reg_sr &= !0xF;
 		self.cop0.reg_sr |= mode >> 2;
 
 	}

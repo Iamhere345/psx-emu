@@ -140,7 +140,6 @@ impl R3000 {
 
 		// TODO: other cause fields
 		self.cop0.reg_cause = (exception as u32) << 2;
-		//println!("exception: {:?} 0x{:X} cause: 0x{:b}", exception, exception as u32, self.cop0.reg_cause);
 
 		self.cop0.reg_epc = match self.in_delay_slot {
 			true => {self.cop0.reg_cause |= 1 << 31; self.pc.wrapping_sub(4)},
@@ -151,7 +150,7 @@ impl R3000 {
 		// bits 5:0
 		let mode = self.cop0.reg_sr & 0x3F;
 		self.cop0.reg_sr &= !0x3F;
-		self.cop0.reg_sr = (mode << 2) & 0x3F;
+		self.cop0.reg_sr |= (mode << 2) & 0x3F;
 
 		self.pc = match self.cop0.reg_sr & (1 << 22) != 0  {
 			true => 0xBFC00180,
