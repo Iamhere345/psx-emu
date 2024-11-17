@@ -1,3 +1,5 @@
+use crate::gpu::Gpu;
+
 const BIOS_START: usize = 0x1FC00000;
 const BIOS_END: usize = BIOS_START + (512 * 1024);
 
@@ -46,6 +48,8 @@ pub struct Bus {
 	bios: Vec<u8>,
 	pub ram: Vec<u8>,
 	scratchpad: Vec<u8>,
+
+	gpu: Gpu,
 }
 
 fn mask_addr(addr: u32) -> u32 {
@@ -58,6 +62,8 @@ impl Bus {
 			bios: bios,
 			ram: vec![0xF0; 2048 * 1024],
 			scratchpad: vec![0xF0; 1024],
+
+			gpu: Gpu::new(),
 		}
 	}
 
@@ -115,10 +121,7 @@ impl Bus {
 		let masked_addr = mask_addr(addr);
 
 		match masked_addr as usize {
-			GPU_START	..= GPU_END => match masked_addr {
-				0x1F801814 => 0b01011110100000000000000000000000,	// hardcode GPUSTAT
-				_ => 0,
-			},
+			GPU_START	..= GPU_END => self.gpu.read32(addr),
 			_ => u32::from_le_bytes([
 				self.read8(addr),
 				self.read8(addr + 1),
@@ -207,7 +210,7 @@ impl Bus {
 			// io register CACHE_CONTROL
 			0xFFFE0130	..= 0xFFFE0134 => {},
 			DMA_START	..= DMA_END => {},
-			GPU_START	..= GPU_END => {},
+			GPU_START	..= GPU_END => self.gpu.write32(addr, write),
 
 			_ => panic!("unhandled write32 [0x{:X}/0x{:X}] 0x{:X}", addr, unmasked_addr, write)
 		}

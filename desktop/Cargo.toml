@@ -1,0 +1,9 @@
+[package]
+name = "desktop"
+version = "0.1.0"
+edition = "2021"
+default-run = "desktop"
+
+[dependencies]
+psx = { path = "../psx"}
+eframe = "0.29.1"
