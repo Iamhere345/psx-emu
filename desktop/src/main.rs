@@ -8,7 +8,7 @@ mod app;
 fn main() {
 
 	let viewport = ViewportBuilder {
-		inner_size: Some(Vec2::new(1280.0, 720.0)),
+		inner_size: Some(Vec2::new(1680.0, 720.0)),
 		..Default::default()
 	};
 
@@ -18,6 +18,6 @@ fn main() {
 		..Default::default()
 	};
 
-    eframe::run_native("My egui App", native_options, Box::new(|cc| Ok(Box::new(Desktop::new(cc))))).expect("Unable to initialise egui app");
+    eframe::run_native("PSX Emu", native_options, Box::new(|cc| Ok(Box::new(Desktop::new(cc))))).expect("Unable to initialise egui app");
 
 }

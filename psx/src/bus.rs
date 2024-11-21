@@ -33,6 +33,9 @@ const EXPANSION1_END: usize = 0x1F080000;
 const EXPANSION2_START: usize = 0x1F802000;
 const EXPANSION2_END: usize = EXPANSION2_START + 0x42;
 
+const PAD_START: usize = 0x1F801040;
+const PAD_END: usize = 0x1F80104E;
+
 const REGION_MASK: [u32; 8] = [
 	// KUSEG 2048Mb
 	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 
@@ -49,7 +52,7 @@ pub struct Bus {
 	pub ram: Vec<u8>,
 	scratchpad: Vec<u8>,
 
-	gpu: Gpu,
+	pub gpu: Gpu,
 }
 
 fn mask_addr(addr: u32) -> u32 {
@@ -84,6 +87,7 @@ impl Bus {
 			TIMERS_START		..= TIMERS_END => 0,
 			IRQ_START			..= IRQ_END => 0,
 			GPU_START			..= GPU_END => 0,
+			PAD_START 			..= PAD_END => 0,
 
 			_ => panic!("unhandled read8 0x{:X}", addr)
 		}
@@ -106,13 +110,14 @@ impl Bus {
 			
 			IRQ_START	..= IRQ_END => 0,
 			SPU_START	..= SPU_END => 0,
+			PAD_START	..= PAD_END => 0,
 
 			_ => panic!("unhandled read16 0x{:X}", addr),
 		}
 
 	}
 
-	pub fn read32(&self, addr: u32) -> u32 {
+	pub fn read32(&mut self, addr: u32) -> u32 {
 
 		if addr % 4 != 0 {
 			panic!("unaligned 32 bit read at addr 0x{:X}", addr);
@@ -161,6 +166,8 @@ impl Bus {
 			IRQ_START		..= IRQ_END => {}
 			SPU_START		..=	SPU_END => {}
 			TIMERS_START	..= TIMERS_END => {}
+			PAD_START ..= PAD_END => {},
+			
 			RAM_START		..= RAM_END => {
 				self.write8(unmasked_addr, lsb);
 				self.write8(unmasked_addr + 1, msb);

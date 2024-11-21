@@ -4,7 +4,7 @@ use eframe::egui;
 use eframe::{App, CreationContext};
 use psx::PSXEmulator;
 
-use crate::components::control::Control;
+use crate::components::{control::*, vram::*, tty_logger::*};
 
 const BIOS_PATH: &str = "res/SCPH1001.bin";
 const CYCLES_PER_SECOND: usize = (33868800.0 / 60.0) as usize;
@@ -13,6 +13,8 @@ pub struct Desktop {
 	psx: PSXEmulator,
 
 	control: Control,
+	vram: VramViewer,
+	tty_logger: TTYLogger,
 
 	control_open: bool,
 }
@@ -25,12 +27,12 @@ impl Desktop {
 		let mut psx = PSXEmulator::new(bios);
 		psx.sideload_exe(fs::read("res/psxtest_cpu.exe").unwrap());
 
-		println!("past sideload");
-
 		Self {
 			psx: psx,
 
 			control: Control::new(),
+			vram: VramViewer::new(cc),
+			tty_logger: TTYLogger::new(),
 
 			control_open: true,
 		}
@@ -45,15 +47,25 @@ impl App for Desktop {
 				self.psx.tick();
 			}
 		}
-
-		//egui::CentralPanel::default().show(ctx, |ui| {
-			
-		//});
 		
 		if self.control_open {
 			egui::Window::new("Control").show(ctx, |ui| {
 				self.control.show(ui);
 			});
 		}
+
+		egui::Window::new("VRAM Viewer").show(ctx, |ui| {
+			self.vram.show(ui, &self.psx);
+		});
+
+		egui::Window::new("TTY Output").show(ctx, |ui| {
+			egui::ScrollArea::vertical()
+				.stick_to_bottom(true)
+				.show(ui, |ui| {
+					self.tty_logger.show(ui, &mut self.psx);
+				});
+		});
+
+		ctx.request_repaint();
 	}
 }

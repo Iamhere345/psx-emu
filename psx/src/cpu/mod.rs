@@ -83,6 +83,8 @@ pub struct R3000 {
 	in_delay_slot: bool,
 	pub debug: bool,
 	exception: bool,
+
+	pub tty_buf: String,
 }
 
 impl R3000 {
@@ -97,6 +99,8 @@ impl R3000 {
 			in_delay_slot: false,
 			debug: false,
 			exception: false,
+
+			tty_buf: String::new(),
 		}
 	}
 
@@ -162,13 +166,13 @@ impl R3000 {
 
 	}
 
-	fn check_tty_putchar(&self) {
+	fn check_tty_putchar(&mut self) {
 		let pc = self.pc & 0x1FFFFFFF;
 
 		if (pc == 0xA0 && self.registers.read_gpr(9) == 0x3C) || (pc == 0xB0 && self.registers.read_gpr(9) == 0x3D) {
 			let char = self.registers.read_gpr(4) as u8 as char;
 
-			print!("{char}");
+			self.tty_buf.push(char);
 		}
 	}
 }

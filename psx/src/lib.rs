@@ -8,24 +8,36 @@ pub mod bus;
 pub struct PSXEmulator {
     cpu: R3000,
     bus: Bus,
+
+    vblank_counter: u64,
+    out_vram: Box<[u8]>,
 }
 
 impl PSXEmulator {
     pub fn new(bios: Vec<u8>) -> Self {
         Self {
             cpu: R3000::new(),
-            bus: Bus::new(bios)
+            bus: Bus::new(bios),
+
+            vblank_counter: 0,
+            out_vram: vec![0; 512 * 2048].into_boxed_slice().try_into().unwrap(),
         }
     }
 
     pub fn tick(&mut self) {
+        if self.vblank_counter == 564_480 {
+            //println!("vlbank");
+            self.out_vram = self.bus.gpu.vram.clone();
+            self.vblank_counter = 0;
+        }
+
         self.cpu.run_instruction(&mut self.bus);
+
+        self.vblank_counter += 1;
     }
 
     // from https://jsgroth.dev/blog/posts/ps1-sideloading/
     pub fn sideload_exe(&mut self, exe: Vec<u8>) {
-
-		println!("sideloading exe...");
 
         // Wait for the BIOS to jump to the shell
         while self.cpu.pc != 0x80030000 {
@@ -54,7 +66,17 @@ impl PSXEmulator {
         // Jump to the EXE entry point; execution can continue normally after this
         self.cpu.pc = initial_pc;
 
-        println!("sideloading done!");
+    }
 
+    pub fn get_vram(&self) -> &Box<[u8]> {
+        &self.out_vram
+    }
+
+    pub fn get_tty_buf(&mut self) -> String {
+        let old_buf = self.cpu.tty_buf.clone();
+
+        self.cpu.tty_buf = String::new();
+
+        old_buf
     }
 }
