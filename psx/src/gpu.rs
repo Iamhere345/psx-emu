@@ -1,8 +1,15 @@
+#[derive(Debug, Clone, Copy)]
+enum DrawCommand {
+	CpuVramDma,
+	VramCpuDma,
+	VramVramDma,
+	DrawRect(u32),
+	QuickFill(u32)
+}
+
 enum GP0State {
 	WaitingForNextCmd,
-	RecvCpuVramDmaParams { idx: u8 },
-	RecvVramCpuDmaParams { idx: u8 },
-	RecvDrawRectParams { idx: u8, cmd: u32 },
+	WaitingForParams { command: DrawCommand, index: u8, max_index: u8 },
 	RecvData(VramDmaInfo),
 	SendData(VramDmaInfo),
 }
@@ -11,12 +18,16 @@ enum GP1State {
 	WaitingForNextCmd,
 }
 
+
+
 #[derive(Clone, Copy)]
 struct VramDmaInfo {
-	vram_x: u16,
-	vram_y: u16,
+	dest_x: u16,
+	dest_y: u16,
+
 	width: u16,
 	height: u16,
+
 	current_row: u16,
 	current_col: u16,
 }
@@ -76,46 +87,57 @@ impl Gpu {
 		self.gp0_state = match self.gp0_state {
 
 			GP0State::WaitingForNextCmd => match word >> 29 {
+				// 0/7 cmds need to be decoded with the highest 8 bits
+				0 => match word >> 24 {
+					0 | 0x3..=0x1E => {
+						println!("NOP / unused");
+
+						GP0State::WaitingForNextCmd
+					},
+					0x01 => {
+						// not emulating the texture cache, this does nothing
+						println!("clear texture cache");
+
+						GP0State::WaitingForNextCmd
+					},
+					0x02 => {
+
+						GP0State::WaitingForParams { command: DrawCommand::QuickFill(word), index: 0, max_index: 1 }
+					},
+					0x1F => {
+						unimplemented!("GP0 IRQ")
+					}
+
+					_ => todo!("Misc cmd 0x{word:X}")
+				}
+
 				1 => todo!("draw polygon"),
 				2 => todo!("draw line"),
-				3 => GP0State::RecvDrawRectParams { idx: 0, cmd: word },
-				4 => todo!("VRAM-VRAM DMA"),
-				5 => GP0State::RecvCpuVramDmaParams { idx: 0 },
-				6 => GP0State::RecvVramCpuDmaParams { idx: 0 },
-				0 | 7 => GP0State::WaitingForNextCmd,//{ println!("Misc: 0x{word:X} 0b{:b}", word >> 29); GP0State::WaitingForNextCmd },
+				3 => GP0State::WaitingForParams { command: DrawCommand::DrawRect(word), index: 0, max_index: 0 },
+				4 => GP0State::WaitingForParams { command: DrawCommand::VramVramDma, index: 0, max_index: 2 },
+				5 => GP0State::WaitingForParams { command: DrawCommand::CpuVramDma, index: 0, max_index: 1 },
+				6 => GP0State::WaitingForParams { command: DrawCommand::VramCpuDma, index: 0, max_index: 1 },
+
+				7 => match word >> 24 {
+					_ => { println!("Enviroment cmd 0x{word:X}"); GP0State::WaitingForNextCmd }
+				}
+
 				_ => unreachable!()
-			}
-
-			GP0State::RecvCpuVramDmaParams { idx } => {
-				self.gp0_params[idx as usize] = word;
-
-				if idx == 1 {
-					self.init_dma()
-				} else {
-					GP0State::RecvCpuVramDmaParams { idx: idx + 1 }
-				}
 			},
 
-			GP0State::RecvVramCpuDmaParams { idx } => {
-				self.gp0_params[idx as usize] = word;
+			GP0State::WaitingForParams { command, index, max_index } => {
 
-				if idx == 1 {
-					self.init_dma()
+				self.gp0_params[index as usize] = word;
+
+				if index == max_index {
+					self.exec_cmd(command)
 				} else {
-					GP0State::RecvVramCpuDmaParams { idx: idx + 1 }
+					GP0State::WaitingForParams { command: command, index: index + 1, max_index: max_index }
 				}
-			},
-
-			GP0State::RecvDrawRectParams { idx, cmd } => {
-				self.gp0_params[idx as usize] = word;
-				
-				self.draw_pixel(cmd, word);
-				GP0State::WaitingForNextCmd
-
 			}
 
 			GP0State::RecvData(vram_dma_info) => self.process_cpu_vram_dma(word, vram_dma_info),
-			GP0State::SendData(vram_dma_info) => GP0State::SendData(vram_dma_info),
+			GP0State::SendData(_) => panic!("write 0x{word:X} to GP0 during VRAM to CPU DMA"),
 		}
 	}
 
@@ -132,10 +154,40 @@ impl Gpu {
 		}
 	}
 
-	fn init_dma(&mut self) -> GP0State {
+	fn exec_cmd(&mut self, cmd: DrawCommand) -> GP0State {
+		match cmd {
+			DrawCommand::CpuVramDma => {
+				let info = self.init_dma();
 
-		let vram_x = (self.gp0_params[0] & 0x3FF) as u16;
-		let vram_y = ((self.gp0_params[0] >> 16) & 0x1FF) as u16;
+				GP0State::RecvData(info)
+			},
+			DrawCommand::VramCpuDma => {
+				let info = self.init_dma();
+
+				GP0State::SendData(info)
+			},
+			DrawCommand::VramVramDma => {
+				self.vram_copy();
+
+				GP0State::WaitingForNextCmd
+			}
+			DrawCommand::DrawRect(cmd) => {
+				self.draw_pixel(cmd, self.gp0_params[0]);
+
+				GP0State::WaitingForNextCmd
+			},
+			DrawCommand::QuickFill(cmd) => {
+				self.quick_fill(cmd);
+
+				GP0State::WaitingForNextCmd
+			}
+		}
+	}
+
+	fn init_dma(&mut self) -> VramDmaInfo {
+
+		let dest_x = (self.gp0_params[0] & 0x3FF) as u16;
+		let dest_y = ((self.gp0_params[0] >> 16) & 0x1FF) as u16;
 
 		let mut width = (self.gp0_params[1] & 0x3FF) as u16;
 		if width == 0 {
@@ -147,14 +199,14 @@ impl Gpu {
 			height = 512;
 		}
 
-		GP0State::RecvData(VramDmaInfo {
-			vram_x,
-			vram_y,
+		VramDmaInfo {
+			dest_x,
+			dest_y,
 			width,
 			height,
 			current_row: 0,
 			current_col: 0,
-		})
+		}
 	}
 
 	fn process_cpu_vram_dma(&mut self, word: u32, mut info: VramDmaInfo) -> GP0State {
@@ -163,13 +215,13 @@ impl Gpu {
 			let halfword = (word >> (16 * i)) as u16;
 
 			// wrap from 511 to 0
-			let vram_row = ((info.vram_y + info.current_row) & 0x1FF) as usize;
+			let vram_row = ((info.dest_y + info.current_row) & 0x1FF) as u32;
 			// wrap from 1023 to 0
-			let vram_col = ((info.vram_x + info.current_col) & 0x3FF) as usize;
+			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
 			let [lsb, msb] = halfword.to_le_bytes();
 
-			let vram_addr = 2 * (vram_col + 1024 * vram_row);
+			let vram_addr = coord_to_vram_index(vram_col, vram_row) as usize;
 			self.vram[vram_addr] = lsb;
 			self.vram[vram_addr + 1] = msb;
 
@@ -196,11 +248,11 @@ impl Gpu {
 		for i in 0..2 {
 
 			// wrap from 511 to 0
-			let vram_row = ((info.vram_y + info.current_row) & 0x1FF) as usize;
+			let vram_row = ((info.dest_y + info.current_row) & 0x1FF) as u32;
 			// wrap from 1023 to 0
-			let vram_col = ((info.vram_x + info.current_col) & 0x3FF) as usize;
+			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
-			let vram_addr = 2 * (vram_col + 1024 * vram_row);
+			let vram_addr = coord_to_vram_index(vram_col, vram_row) as usize;
 			result[i + 0] = self.vram[vram_addr + 0];
 			result[i + 1] = self.vram[vram_addr + 1];
 
@@ -212,14 +264,45 @@ impl Gpu {
 
 				if info.current_row == info.height {
 					self.gp0_state = GP0State::WaitingForNextCmd;
+				} else {
+					self.gp0_state = GP0State::SendData(info);
 				}
 			}
 
 		}
 
-		self.gp0_state = GP0State::SendData(info);
-
 		u32::from_le_bytes(result)
+	}
+
+	fn vram_copy(&mut self) {
+		let src_x = (self.gp0_params[0] & 0x3FF) as u16;
+		let src_y = ((self.gp0_params[0] >> 16) & 0x1FF) as u16;
+
+		let dest_x = (self.gp0_params[1] & 0x3FF) as u16;
+		let dest_y = ((self.gp0_params[1] >> 16) & 0x1FF) as u16;
+
+		let mut width = (self.gp0_params[2] & 0x3FF) as u16;
+		if width == 0 {
+			width = 1024;
+		}
+
+		let mut height = ((self.gp0_params[2] >> 16) & 0x1FF) as u16;
+		if height == 0 {
+			height = 512;
+		}
+
+		for y_offset in 0..height {
+			for x_offset in 0..width {
+				let src_addr = coord_to_vram_index((src_x + x_offset) as u32, (src_y + y_offset) as u32) as usize;
+				let dest_addr = coord_to_vram_index((dest_x + x_offset) as u32, (dest_y + y_offset) as u32) as  usize;
+
+				let src_lsb = self.vram[src_addr];
+				let src_msb = self.vram[src_addr + 1];
+
+				self.vram[dest_addr] = src_lsb;
+				self.vram[dest_addr + 1] = src_msb;
+			}
+		}
 	}
 
 	fn draw_pixel(&mut self, cmd: u32, param: u32) {
@@ -237,8 +320,41 @@ impl Gpu {
 			//println!("draw pixel ({r}, {g}, {b}) at ({x}, {y})");
 		}
 
-		let vram_addr = 2 * (x + 1024 * y) as usize;
+		let vram_addr = coord_to_vram_index(x, y) as usize;
 		self.vram[vram_addr] = pixel_lsb;
 		self.vram[vram_addr + 1] = pixel_msb;
 	}
+
+	fn quick_fill(&mut self, cmd: u32) {
+		let r = ((cmd & 0xFF) >> 3) as u16;
+		let g = (((cmd >> 8) & 0xFF) >> 3) as u16;
+		let b = (((cmd >> 16) & 0xFF) >> 3) as u16;
+
+		let colour = r | (g << 5) | (b << 10);
+
+		let x = (self.gp0_params[0] & 0xFFFF) & 0x3F0;
+		let y = (self.gp0_params[0] >> 16) & 0x1FF;
+		
+		// https://psx-spx.consoledev.net/graphicsprocessingunitgpu/#masking-and-rounding-for-fill-command-parameters
+		let width = (((self.gp0_params[1] & 0xFFFF) & 0x3FF) + 0x0F) & !(0x0F);
+		let height = (self.gp0_params[1] >> 16) & 0x1FF;
+
+		println!("quick fill at ({x}, {y}) of size ({width}, {height}) cmd: ${cmd:X} r:{r} g:{g} b{b} colour: ${colour:X}");
+
+		for y_offset in 0..height {
+			for x_offset in 0..width {
+				let [colour_lsb, colour_msb] = colour.to_le_bytes();
+
+				let index = coord_to_vram_index((x + x_offset) & 0x3FF, (y + y_offset) & 0x1FF);
+
+				self.vram[index as usize] = colour_lsb;
+				self.vram[(index + 1) as usize] = colour_msb;
+			}
+		}
+
+	}
+}
+
+fn coord_to_vram_index(x: u32, y: u32) -> u32 {
+	2 * (1024 * y).wrapping_add(x)
 }

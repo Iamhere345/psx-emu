@@ -25,7 +25,7 @@ impl Desktop {
 		let bios = fs::read(BIOS_PATH).unwrap();
 
 		let mut psx = PSXEmulator::new(bios);
-		psx.sideload_exe(fs::read("res/psxtest_cpu.exe").unwrap());
+		psx.sideload_exe(fs::read("res/MemoryTransfer16BPP.exe").unwrap());
 
 		Self {
 			psx: psx,
