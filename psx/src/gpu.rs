@@ -83,7 +83,7 @@ impl Gpu {
 		}
 	}
 
-	fn gp0_cmd(&mut self, word: u32) {
+	pub fn gp0_cmd(&mut self, word: u32) {
 		self.gp0_state = match self.gp0_state {
 
 			GP0State::WaitingForNextCmd => match word >> 29 {
@@ -111,7 +111,7 @@ impl Gpu {
 					_ => todo!("Misc cmd 0x{word:X}")
 				}
 
-				1 => todo!("draw polygon"),
+				1 => {println!("draw polygon"); GP0State::WaitingForNextCmd},
 				2 => todo!("draw line"),
 				3 => GP0State::WaitingForParams { command: DrawCommand::DrawRect(word), index: 0, max_index: 0 },
 				4 => GP0State::WaitingForParams { command: DrawCommand::VramVramDma, index: 0, max_index: 2 },

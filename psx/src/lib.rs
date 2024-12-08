@@ -3,6 +3,7 @@ use bus::Bus;
 
 mod cpu;
 mod gpu;
+mod dma;
 pub mod bus;
 
 pub struct PSXEmulator {

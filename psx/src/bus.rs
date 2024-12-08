@@ -1,4 +1,5 @@
 use crate::gpu::Gpu;
+use crate::dma::DmaController;
 
 const BIOS_START: usize = 0x1FC00000;
 const BIOS_END: usize = BIOS_START + (512 * 1024);
@@ -53,6 +54,7 @@ pub struct Bus {
 	scratchpad: Vec<u8>,
 
 	pub gpu: Gpu,
+	pub dma: DmaController,
 }
 
 fn mask_addr(addr: u32) -> u32 {
@@ -67,6 +69,7 @@ impl Bus {
 			scratchpad: vec![0xF0; 1024],
 
 			gpu: Gpu::new(),
+			dma: DmaController::new(),
 		}
 	}
 
@@ -83,7 +86,6 @@ impl Bus {
 			EXPANSION2_START	..= EXPANSION2_END => {println!("read to expansion 2 register 0x{:X}", unmasked_addr); 0},
 
 			SPU_START			..= SPU_END => {println!("read to SPU register 0x{:X}", unmasked_addr); 0},
-			DMA_START			..= DMA_END => 0,
 			TIMERS_START		..= TIMERS_END => 0,
 			IRQ_START			..= IRQ_END => 0,
 			GPU_START			..= GPU_END => 0,
@@ -127,6 +129,7 @@ impl Bus {
 
 		match masked_addr as usize {
 			GPU_START	..= GPU_END => self.gpu.read32(addr),
+			DMA_START	..= DMA_END => self.dma.read32(addr),
 			_ => u32::from_le_bytes([
 				self.read8(addr),
 				self.read8(addr + 1),
@@ -216,7 +219,21 @@ impl Bus {
 			0x1F801060	..= 0x1F801064 => {},
 			// io register CACHE_CONTROL
 			0xFFFE0130	..= 0xFFFE0134 => {},
-			DMA_START	..= DMA_END => {},
+			DMA_START	..= DMA_END => {
+				match addr {
+					0x1F801080	..= 0x1F8010EF => {
+						self.dma.write32(addr, write);
+
+						let channel = &self.dma.channels[((addr >> 0x4) & 0x7) as usize];
+
+						if channel.active() {
+							println!("triggered DMA{}", channel.channel_num);
+							self.do_dma(channel.channel_num);
+						}
+					},
+					_ => self.dma.write32(addr, write),
+				}
+			},
 			GPU_START	..= GPU_END => self.gpu.write32(addr, write),
 
 			_ => panic!("unhandled write32 [0x{:X}/0x{:X}] 0x{:X}", addr, unmasked_addr, write)
