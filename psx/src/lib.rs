@@ -11,7 +11,7 @@ pub struct PSXEmulator {
     bus: Bus,
 
     vblank_counter: u64,
-    out_vram: Box<[u8]>,
+    out_vram: Box<[u16]>,
 }
 
 impl PSXEmulator {
@@ -33,6 +33,12 @@ impl PSXEmulator {
         }
 
         self.cpu.run_instruction(&mut self.bus);
+
+        if self.bus.gpu.debug {
+            log::debug!("0x{:X}", self.cpu.pc);
+            self.bus.gpu.debug = false;
+        }
+        
 
         self.vblank_counter += 1;
     }
@@ -69,7 +75,7 @@ impl PSXEmulator {
 
     }
 
-    pub fn get_vram(&self) -> &Box<[u8]> {
+    pub fn get_vram(&self) -> &Box<[u16]> {
         &self.out_vram
     }
 

@@ -30,8 +30,8 @@ impl VramViewer {
 
 		for y in 0..512 {
 			for x in 0..1024 {
-				let vram_addr = 2 * (1024 * y + x);
-				let pixel = u16::from_le_bytes([vram[vram_addr], vram[vram_addr + 1]]);
+				let vram_addr = 1024 * y + x;
+				let pixel = vram[vram_addr];
 
 				if pixel != 0 {
 					//println!("pixel: 0x{pixel:X}");

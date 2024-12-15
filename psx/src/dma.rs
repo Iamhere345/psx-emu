@@ -1,4 +1,5 @@
 use std::array;
+use log::*;
 
 use crate::bus::Bus;
 
@@ -10,9 +11,10 @@ const CHANNEL_SPU: usize = 4;
 const CHANNEL_PIO: usize = 5;
 const CHANNEL_OTC: usize = 6;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum SyncMode {
 	// transfer data all at once after DREQ is first asserted
+	#[default]
 	Burst = 0,
 	// split data into blocks, transfer next block whenever DREQ is asserted
 	Slice = 1,
@@ -20,20 +22,22 @@ pub enum SyncMode {
 	LinkedList = 2
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum DmaDirection {
+	#[default]
 	ToRam = 0,
 	FromRam = 1,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 enum StepDirection {
+	#[default]
 	Inc = 0,
 	Dec = 1,
 }
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Channel {
 	pub channel_num: usize,
 
@@ -54,34 +58,15 @@ pub struct Channel {
 	pub transfer_active: bool,
 	pub manual_trigger: bool,
 
-	// TODO
-	dummy: u8,
+	// unimplemented
+	pause_transfer: bool,
+	bus_snooping: bool,
 }
 
 impl Channel {
 	pub fn new(num: usize) -> Self {
-		Self {
-			channel_num: num,
-
-			base_addr: 0xDEADBEEF,
-			
-			block_size: 0xDEAD,
-			block_amount: 0xDEAD,
-
-			transfer_dir: DmaDirection::FromRam,
-			step_dir: StepDirection::Inc,
-
-			sync_mode: SyncMode::Burst,
-
-			chopping_enabled: false,
-			chopping_dma_window_size: 0,
-			chopping_cpu_window_size: 0,
-
-			transfer_active: false,
-			manual_trigger: false,
-
-			dummy: 0,
-		}
+		// all zeros besides bit 1 (for OTC)
+		Self { channel_num: num, step_dir: StepDirection::Dec, ..Default::default() }
 	}
 
 	pub fn read32(&self, addr: u32) -> u32 {
@@ -98,7 +83,8 @@ impl Channel {
 					| (self.chopping_cpu_window_size as u32) << 20
 					| (self.transfer_active as u32) << 24
 					| (self.manual_trigger as u32) << 28
-					| (self.dummy as u32) << 29
+					| (self.pause_transfer as u32) << 29
+					| (self.bus_snooping as u32) << 30
 
 			},
 			_ => unreachable!()
@@ -107,7 +93,7 @@ impl Channel {
 
 	pub fn write32(&mut self, addr: u32, write: u32) {
 
-		println!("[DMA{}] write 0x{write:X} to register {}", self.channel_num, (addr >> 0x2) & 0x3);
+		//debug!("[DMA{}] write 0x{write:X} to register {}", self.channel_num, (addr >> 0x2) & 0x3);
 
 		match (addr >> 0x2) & 0x3 {
 			0 => self.base_addr = write,
@@ -117,6 +103,18 @@ impl Channel {
 			},
 			// channel control register
 			2 => {
+				//debug!("DMA{}: write 0x{write:X} to channel control register (0x{addr:X})", self.channel_num);
+				
+				self.transfer_active = (write >> 24) & 1 != 0;
+				self.manual_trigger = (write >> 28) & 1 != 0;
+
+				self.bus_snooping = (write >> 30) & 1 != 0;
+
+				if self.channel_num == CHANNEL_OTC {
+					// other bits aren't writable in DMA6
+					return;
+				}
+
 				self.transfer_dir = match (write & 1) != 0 {
 					true => DmaDirection::FromRam,
 					false => DmaDirection::ToRam
@@ -139,10 +137,9 @@ impl Channel {
 				self.chopping_dma_window_size = ((write >> 16) & 7) as u8;
 				self.chopping_cpu_window_size = ((write >> 20) & 7) as u8;
 
-				self.transfer_active = (write >> 24) & 1 != 0;
-				self.manual_trigger = (write >> 28) & 1 != 0;
-
-				self.dummy = ((write >> 29) & 3) as u8;
+				self.pause_transfer = (write >> 29) & 1 != 0;
+				
+				//debug!("DMA{}: new control {self:X?}", self.channel_num);
 
 			},
 			_ => unreachable!()
@@ -299,17 +296,30 @@ impl DmaController {
 impl Bus {
 	pub fn do_dma(&mut self, channel: usize) {
 
-		println!("doing DMA{channel} {:?}", self.dma.channels[channel].sync_mode);
+		//println!("doing DMA{channel} {:?}", self.dma.channels[channel].sync_mode);
+
+		if !self.dma.control.channel_enable[channel] {
+			info!("triggered DMA{channel} when disabled in control reg");
+			return;
+		}
+
+		if channel == CHANNEL_OTC {
+			self.do_dma_otc();
+			return;
+		}
 
 		match self.dma.channels[channel].sync_mode {
 			SyncMode::LinkedList => self.do_dma_linked_list(channel),
 			_ => self.do_dma_block(channel),
 		}
 	}
-
+	
 	fn do_dma_linked_list(&mut self, channel_num: usize) {
-
-		println!("start linked list DMA");
+		
+		assert_eq!(channel_num, 2);
+		assert_eq!(self.dma.channels[channel_num].transfer_dir, DmaDirection::FromRam);
+		
+		debug!("start linked list DMA{channel_num} step: {:?}", self.dma.channels[channel_num].step_dir);
 
 		let channel = self.dma.channels[channel_num].clone();
 
@@ -319,28 +329,69 @@ impl Bus {
 
 			let header = self.read32(addr);
 			let words_to_send = header >> 24;
+			let next_addr = header & 0xFFFFFF;
+
+			debug!("node: 0x{header:X} word count: 0x{words_to_send:X} next addr: 0x{next_addr:X}");
+
+			//println!("words to send: {words_to_send}");
 
 			for i in 0..words_to_send {
 
-				let data = self.read32(addr + 4 * (i + 1));
+				let data = self.read32( addr.wrapping_add(4 * (i + 1)));
 				self.gpu.gp0_cmd(data);
 
-				println!("linked list write 0x{data:X} to GP0");
-			}
-
-			let next_addr = header & 0xFFFFFF;
-
-			// the end node only needs bit 23 to be set
-			if next_addr & (1 << 23) != 0 {
-				break;
+				debug!("[0x{i:X}] linked list write 0x{data:X} to GP0");
 			}
 
 			addr = next_addr;
+
+			//println!("next node is 0x{next_addr:X}");
+
+			// the end node only needs bit 23 to be set
+			if next_addr & (1 << 23) != 0 {
+			//if addr & 0x800000 != 0 {
+			//if next_addr == 0xFFFFFF {
+				debug!("linked list end (old addr is 0x{addr:X})");
+				break;
+			}
 
 		}
 
 		self.dma.channels[channel_num].transfer_active = false;
 		self.dma.channels[channel_num].manual_trigger = false;
+
+	}
+
+	fn do_dma_otc(&mut self) {
+
+		let mut addr = self.dma.channels[CHANNEL_OTC].base_addr;
+		let mut dma_len = self.dma.channels[CHANNEL_OTC].block_size as u32;
+
+		if dma_len == 0 {
+			dma_len = 0x10000;
+		}
+
+		debug!("DMA6 len: 0x{dma_len:X} start: 0x{addr:X}");
+		
+		for i in 0..dma_len {
+
+			//println!("[0x{addr:X}] writing OTC");
+			
+			let next_addr = if i == dma_len - 1 {
+				debug!("DMA6 end: 0x{addr:X}");
+				0xFFFFFF
+			} else {
+				addr.wrapping_sub(4) & 0x1FFFFF
+			};
+
+
+			self.write32(addr, next_addr);
+			addr = next_addr;
+
+		}
+
+		self.dma.channels[CHANNEL_OTC].transfer_active = false;
+		self.dma.channels[CHANNEL_OTC].manual_trigger = false;
 
 	}
 
@@ -354,54 +405,40 @@ impl Bus {
 		};
 
 		let mut addr = channel.base_addr;
-		let mut words_left = match channel.sync_mode {
+		let words_left = match channel.sync_mode {
 			SyncMode::Burst => channel.block_size,
 			SyncMode::Slice => channel.block_size * channel.block_amount,
 			SyncMode::LinkedList => unimplemented!()
 		};
 
-		while words_left > 0 {
-
-			let masked_addr = addr & 0x1FFFFC;
+		for _ in 0..words_left {
 
 			match channel.transfer_dir {
 				DmaDirection::FromRam => {
-					let src_word = self.read32(masked_addr);
+					let word = self.read32(addr);
 
 					match channel_num {
 						CHANNEL_GPU => {
-							println!("writing 0x{src_word:X} to GP0");
-							self.gpu.gp0_cmd(src_word);
+							debug!("dma block write 0x{word:X} to GP0");
+							self.gpu.gp0_cmd(word);
 						},
-						_ => todo!("FromRam DMA{channel_num}"),
+						_ => todo!("FromRam DMA{channel_num}")
 					}
 				},
+
 				DmaDirection::ToRam => {
-					let src_word = match channel_num {
-						CHANNEL_OTC => match words_left {
-							// last node is the end marker
-							1 => 0xFFFFFF,
-							// pointer to next node
-							_ => addr.wrapping_sub(4) & 0x1FFFFC,
-						},
-						_ => todo!("DMA{channel_num}"),
-					};
-
-					self.write32(masked_addr, src_word);
-
-					println!("[0x{masked_addr:X}] DMA 0x{src_word:X}");
+					todo!()
 				}
 			}
 
-			addr = (addr as i32).wrapping_add(step) as u32;
-			words_left -= 1;
+			addr = ((addr as i32).wrapping_add(step) as u32) & 0x1FFFFFFF;
 
 		}
 
 		self.dma.channels[channel_num].transfer_active = false;
 		self.dma.channels[channel_num].manual_trigger = false;
 
-		println!("DMA{channel_num} ended");
 
 	}
+
 }

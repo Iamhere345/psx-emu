@@ -1,15 +1,20 @@
+use std::cmp;
+use log::*;
+
 #[derive(Debug, Clone, Copy)]
 enum DrawCommand {
 	CpuVramDma,
 	VramCpuDma,
 	VramVramDma,
 	DrawRect(u32),
+	DrawPolygon(PolygonCmdParams),
 	QuickFill(u32)
 }
 
+#[derive(Debug, Clone, Copy)]
 enum GP0State {
 	WaitingForNextCmd,
-	WaitingForParams { command: DrawCommand, index: u8, max_index: u8 },
+	WaitingForParams { command: DrawCommand, index: u8, words_left: u8 },
 	RecvData(VramDmaInfo),
 	SendData(VramDmaInfo),
 }
@@ -18,9 +23,17 @@ enum GP1State {
 	WaitingForNextCmd,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PolygonCmdParams {
+	shaded: bool,	// true: gouraud false: flat
+	vertices: u8,			// 3 / 4
+	textured: bool,
+	semi_transparent: bool,
+	raw_texture: bool,		// true: raw texture false: modulated
+	colour: Colour,
+}
 
-
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct VramDmaInfo {
 	dest_x: u16,
 	dest_y: u16,
@@ -32,8 +45,51 @@ struct VramDmaInfo {
 	current_col: u16,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Colour {
+	r: u8,
+	g: u8,
+	b: u8,
+}
+
+impl Colour {
+	fn from_rgb(r: u8, g: u8, b: u8) -> Self {
+		Self { r, g, b }
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Point {
+	x: i32,
+	y: i32
+}
+
+impl Point {
+	fn new(x: i32, y: i32) -> Self {
+		Self {
+			x: x,
+			y: y
+		}
+	}
+	// FIXME this is probably wrong; check nocash gpu attributes
+	fn from_packet(packet: u32) -> Self {
+		/* Self {
+			x: (packet & 0x7FF) as i32,
+			y: ((packet >> 16) & 0x7FF) as i32
+		} */
+		Self {
+			x: ((packet as i32) << 21) >> 21,
+			y: (((packet >> 16) as i32) << 21) >> 21
+		}
+	} 
+}
+
+struct Gpustat {
+
+}
+
 pub struct Gpu {
-	pub vram: Box<[u8]>,
+	pub vram: Box<[u16]>,
 
 	gp0_state: GP0State,
 	gp0_params: [u32; 16],
@@ -43,12 +99,17 @@ pub struct Gpu {
 
 	reg_gpustat: u32,
 	reg_gpuread: u32,
+
+	draw_area_top_left: Point,
+	draw_area_bottom_right: Point,
+
+	pub debug: bool,
 }
 
 impl Gpu {
 	pub fn new() -> Self {
 		Self {
-			vram: vec![0; 512 * 2048].into_boxed_slice().try_into().unwrap(),
+			vram: vec![0; 512 * 1024].into_boxed_slice().try_into().unwrap(),
 
 			gp0_state: GP0State::WaitingForNextCmd,
 			gp0_params: [0; 16],
@@ -58,6 +119,11 @@ impl Gpu {
 
 			reg_gpustat: 0b01011110100000000000000000000000,
 			reg_gpuread: 0,
+
+			draw_area_top_left: Point::new(0, 0),
+			draw_area_bottom_right: Point::new(0, 0),
+
+			debug: false
 		}
 	}
 
@@ -70,7 +136,7 @@ impl Gpu {
 
 				self.reg_gpuread
 			},
-			0x1F801814 => self.reg_gpustat,
+			0x1F801814 => self.gpustat(),
 			_ => unimplemented!("0x{addr:X}"),
 		}
 	}
@@ -83,26 +149,54 @@ impl Gpu {
 		}
 	}
 
+	fn gpustat(&mut self) -> u32 {
+		let read_to_recv_cmd = matches!(self.gp0_state, GP0State::WaitingForNextCmd);
+		let ready_to_send_vram = matches!(self.gp0_state, GP0State::SendData(_));
+		let ready_to_recv_dma_block = match self.gp0_state {
+			GP0State::WaitingForNextCmd => true,
+			GP0State::RecvData(_) => true,
+			GP0State::SendData(_) => true,
+			_ => false,
+		};
+
+		debug!("***READ GPUSTAT***");
+		self.debug = true;
+
+		//(1 << 25)
+			/* (u32::from(read_to_recv_cmd) << 26)
+			| (u32::from(true) << 27)
+			| (u32::from(ready_to_recv_dma_block) << 28)
+			| (0b10 << 29) */
+			0b01011110100000000000000000000000
+			//0x1C000000
+			//0xFF000000
+			//0x5e800000
+			//0x9C00020A
+
+	}
+
 	pub fn gp0_cmd(&mut self, word: u32) {
+
+		debug!("GP0: 0x{word:X} state: {:?}", self.gp0_state);
+
 		self.gp0_state = match self.gp0_state {
 
 			GP0State::WaitingForNextCmd => match word >> 29 {
 				// 0/7 cmds need to be decoded with the highest 8 bits
 				0 => match word >> 24 {
 					0 | 0x3..=0x1E => {
-						println!("NOP / unused");
+						debug!("NOP / unused cmd: 0x{word:X} GP0(${:X})", word >> 29);
 
 						GP0State::WaitingForNextCmd
 					},
 					0x01 => {
 						// not emulating the texture cache, this does nothing
-						println!("clear texture cache");
+						debug!("clear texture cache");
 
 						GP0State::WaitingForNextCmd
 					},
 					0x02 => {
-
-						GP0State::WaitingForParams { command: DrawCommand::QuickFill(word), index: 0, max_index: 1 }
+						GP0State::WaitingForParams { command: DrawCommand::QuickFill(word), index: 0, words_left: 2 }
 					},
 					0x1F => {
 						unimplemented!("GP0 IRQ")
@@ -111,33 +205,85 @@ impl Gpu {
 					_ => todo!("Misc cmd 0x{word:X}")
 				}
 
-				1 => {println!("draw polygon"); GP0State::WaitingForNextCmd},
+				1 => {
+
+					let gouraud_shading = (word >> 28) & 1 != 0;
+					let vertices = if (word >> 27) & 1 != 0 { 4 } else { 3 };
+					let textured = (word >> 26) & 1 != 0;
+
+					let params = PolygonCmdParams {
+						shaded: gouraud_shading,
+						vertices: vertices,
+						textured: textured,
+						semi_transparent: (word >> 25) & 1 != 0,
+						raw_texture: (word >> 24) & 1 != 0,
+						colour: Colour::from_rgb(
+							(word >> 0) as u8,
+							(word >> 8) as u8,
+							(word >> 16) as u8
+						)
+					};
+
+					let words_per_vertex = 1 + u8::from(textured) + u8::from(gouraud_shading);
+					//let words_left = vertices * words_per_vertex + u8::from(!gouraud_shading);
+					let words_left = vertices * (1 + u8::from(textured))
+						+ (vertices - 1) * u8::from(gouraud_shading);
+
+					debug!("start polygon words left {words_left} verts: {vertices} textured: {textured} shaded: {gouraud_shading} colour: {:?}", params.colour);
+
+					GP0State::WaitingForParams { command: DrawCommand::DrawPolygon(params), index: 0, words_left: words_left }
+				},
 				2 => todo!("draw line"),
-				3 => GP0State::WaitingForParams { command: DrawCommand::DrawRect(word), index: 0, max_index: 0 },
-				4 => GP0State::WaitingForParams { command: DrawCommand::VramVramDma, index: 0, max_index: 2 },
-				5 => GP0State::WaitingForParams { command: DrawCommand::CpuVramDma, index: 0, max_index: 1 },
-				6 => GP0State::WaitingForParams { command: DrawCommand::VramCpuDma, index: 0, max_index: 1 },
+				3 => GP0State::WaitingForParams { command: DrawCommand::DrawRect(word), index: 0, words_left: 1 },
+				4 => GP0State::WaitingForParams { command: DrawCommand::VramVramDma, index: 0, words_left: 3 },
+				5 => GP0State::WaitingForParams { command: DrawCommand::CpuVramDma, index: 0, words_left: 2 },
+				6 => GP0State::WaitingForParams { command: DrawCommand::VramCpuDma, index: 0, words_left: 2 },
 
 				7 => match word >> 24 {
-					_ => { println!("Enviroment cmd 0x{word:X}"); GP0State::WaitingForNextCmd }
+					0xE1 => { debug!("set draw mode"); GP0State::WaitingForNextCmd },
+					//set drawing area top left
+					0xE3 => {
+						self.draw_area_top_left = Point {
+							x: (word & 0x3FF) as i32,
+							y: ((word >> 10) & 0x1FF) as i32
+						};
+
+						debug!("draw area top left: {:?}", self.draw_area_top_left);
+
+						GP0State::WaitingForNextCmd
+					},
+					// set drawing area bottom right
+					0xE4 => {
+						self.draw_area_bottom_right = Point {
+							x: (word & 0x3FF) as i32,
+							y: ((word >> 10) & 0x1FF) as i32
+						};
+
+						debug!("draw area bottom right: {:?} word: 0x{word:X}", self.draw_area_bottom_right);
+
+						GP0State::WaitingForNextCmd
+					},
+					0xE5 => { debug!("set drawing offset"); GP0State::WaitingForNextCmd },
+					_ => { debug!("Enviroment cmd 0x{word:X} GP0(${:X})", word >> 24); GP0State::WaitingForNextCmd }
 				}
 
 				_ => unreachable!()
 			},
 
-			GP0State::WaitingForParams { command, index, max_index } => {
+			GP0State::WaitingForParams { command, index, words_left } => {
 
 				self.gp0_params[index as usize] = word;
+				debug!("(write 0x{word:X}) words left {}", words_left - 1);
 
-				if index == max_index {
+				if words_left == 1 {
 					self.exec_cmd(command)
 				} else {
-					GP0State::WaitingForParams { command: command, index: index + 1, max_index: max_index }
+					GP0State::WaitingForParams { command: command, index: index + 1, words_left: words_left - 1 }
 				}
 			}
 
 			GP0State::RecvData(vram_dma_info) => self.process_cpu_vram_dma(word, vram_dma_info),
-			GP0State::SendData(_) => panic!("write 0x{word:X} to GP0 during VRAM to CPU DMA"),
+			GP0State::SendData(info) => {panic!("write 0x{word:X} to GP0 during VRAM to CPU DMA"); GP0State::WaitingForNextCmd},
 		}
 	}
 
@@ -176,6 +322,12 @@ impl Gpu {
 
 				GP0State::WaitingForNextCmd
 			},
+			DrawCommand::DrawPolygon(cmd) => {
+				debug!("draw polygon");
+				self.draw_polygon(cmd);
+
+				GP0State::WaitingForNextCmd
+			}
 			DrawCommand::QuickFill(cmd) => {
 				self.quick_fill(cmd);
 
@@ -219,11 +371,8 @@ impl Gpu {
 			// wrap from 1023 to 0
 			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
-			let [lsb, msb] = halfword.to_le_bytes();
-
 			let vram_addr = coord_to_vram_index(vram_col, vram_row) as usize;
-			self.vram[vram_addr] = lsb;
-			self.vram[vram_addr + 1] = msb;
+			self.vram[vram_addr] = halfword;
 
 			info.current_col += 1;
 
@@ -243,7 +392,7 @@ impl Gpu {
 
 	fn process_vram_cpu_dma(&mut self, mut info: VramDmaInfo) -> u32 {
 
-		let mut result: [u8; 4] = [0; 4];
+		let mut result: [u16; 2] = [0; 2];
 
 		for i in 0..2 {
 
@@ -253,8 +402,7 @@ impl Gpu {
 			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
 			let vram_addr = coord_to_vram_index(vram_col, vram_row) as usize;
-			result[i + 0] = self.vram[vram_addr + 0];
-			result[i + 1] = self.vram[vram_addr + 1];
+			result[i] = self.vram[vram_addr];
 
 			info.current_col += 1;
 
@@ -271,7 +419,7 @@ impl Gpu {
 
 		}
 
-		u32::from_le_bytes(result)
+		(u32::from(result[0]) << 16) | u32::from(result[1])
 	}
 
 	fn vram_copy(&mut self) {
@@ -296,11 +444,8 @@ impl Gpu {
 				let src_addr = coord_to_vram_index((src_x + x_offset) as u32, (src_y + y_offset) as u32) as usize;
 				let dest_addr = coord_to_vram_index((dest_x + x_offset) as u32, (dest_y + y_offset) as u32) as  usize;
 
-				let src_lsb = self.vram[src_addr];
-				let src_msb = self.vram[src_addr + 1];
-
-				self.vram[dest_addr] = src_lsb;
-				self.vram[dest_addr + 1] = src_msb;
+				let src = self.vram[src_addr];
+				self.vram[dest_addr] = src;
 			}
 		}
 	}
@@ -311,7 +456,6 @@ impl Gpu {
 		let b = ((cmd >> 16) & 0xFF) >> 3;
 
 		let pixel = (r | (g << 5) | (b << 10)) as u16;
-		let [pixel_lsb, pixel_msb] = pixel.to_le_bytes();
 
 		let x = param & 0x3FF;
 		let y = (param >> 16) & 0x1FF;
@@ -321,8 +465,7 @@ impl Gpu {
 		}
 
 		let vram_addr = coord_to_vram_index(x, y) as usize;
-		self.vram[vram_addr] = pixel_lsb;
-		self.vram[vram_addr + 1] = pixel_msb;
+		self.vram[vram_addr] = pixel;
 	}
 
 	fn quick_fill(&mut self, cmd: u32) {
@@ -339,22 +482,118 @@ impl Gpu {
 		let width = (((self.gp0_params[1] & 0xFFFF) & 0x3FF) + 0x0F) & !(0x0F);
 		let height = (self.gp0_params[1] >> 16) & 0x1FF;
 
-		println!("quick fill at ({x}, {y}) of size ({width}, {height}) cmd: ${cmd:X} r:{r} g:{g} b{b} colour: ${colour:X}");
+		//println!("quick fill at ({x}, {y}) of size ({width}, {height}) cmd: ${cmd:X} r:{r} g:{g} b{b} colour: ${colour:X}");
 
 		for y_offset in 0..height {
 			for x_offset in 0..width {
-				let [colour_lsb, colour_msb] = colour.to_le_bytes();
-
 				let index = coord_to_vram_index((x + x_offset) & 0x3FF, (y + y_offset) & 0x1FF);
 
-				self.vram[index as usize] = colour_lsb;
-				self.vram[(index + 1) as usize] = colour_msb;
+				self.vram[index as usize] = colour;
 			}
 		}
 
 	}
+
+	fn draw_polygon(&mut self, cmd: PolygonCmdParams) {
+
+		let mut v: Vec<Point> = Vec::new();
+
+		if cmd.shaded && cmd.textured {
+			v.push(Point::from_packet(self.gp0_params[0]));
+			v.push(Point::from_packet(self.gp0_params[3]));
+			v.push(Point::from_packet(self.gp0_params[6]));
+
+			if cmd.vertices == 4 {
+				v.push(Point::from_packet(self.gp0_params[9]));
+			}
+		} else if cmd.shaded || cmd.textured {
+			v.push(Point::from_packet(self.gp0_params[0]));
+			v.push(Point::from_packet(self.gp0_params[2]));
+			v.push(Point::from_packet(self.gp0_params[4]));
+
+			if cmd.vertices == 4 {
+				v.push(Point::from_packet(self.gp0_params[6]));
+			}
+		} else {
+			v.push(Point::from_packet(self.gp0_params[0]));
+			v.push(Point::from_packet(self.gp0_params[1]));
+			v.push(Point::from_packet(self.gp0_params[2]));
+
+			if cmd.vertices == 4 {
+				v.push(Point::from_packet(self.gp0_params[3]));
+			}
+		}
+
+		ensure_vertex_order(&mut v);
+
+		self.draw_triangle(v[0], v[1], v[2], cmd);
+
+		if cmd.vertices == 4 {
+			
+			let mut v2 = vec![v[1], v[2], v[3]];
+			ensure_vertex_order(&mut v2);
+
+			self.draw_triangle(v2[0], v2[1], v2[2], cmd);
+		}
+
+	}
+
+	fn draw_triangle(&mut self, v0: Point, v1: Point, v2: Point, cmd: PolygonCmdParams) {
+		// compute polygon bounding box
+		let mut min_x = cmp::min(v0.x, cmp::min(v1.x, v2.x));
+		let mut max_x = cmp::max(v0.x, cmp::max(v1.x, v2.x));
+		let mut min_y = cmp::min(v0.y, cmp::min(v1.y, v2.y));
+		let mut max_y = cmp::max(v0.y, cmp::max(v1.y, v2.y));
+
+		// constrain bounding box to drawing area
+		min_x = cmp::max(min_x, self.draw_area_top_left.x);
+		max_x = cmp::min(max_x, self.draw_area_bottom_right.x);
+		min_y = cmp::max(min_y, self.draw_area_top_left.y);
+		max_y = cmp::min(max_y, self.draw_area_bottom_right.y);
+
+		if min_x > max_x || min_y > max_y {
+			return;
+		}
+
+		let draw_colour = u16::from(cmd.colour.r) | (u16::from(cmd.colour.g) << 5) | (u16::from(cmd.colour.b) << 10);
+
+		for y in min_y..=max_y {
+			for x in min_x..=max_x {
+
+				if is_inside_triangle(Point::new(x, y), v0, v1, v2) {
+					self.vram[coord_to_vram_index(x as u32, y as u32) as usize] = draw_colour;
+				}
+			}
+		}
+	}
 }
 
 fn coord_to_vram_index(x: u32, y: u32) -> u32 {
-	2 * (1024 * y).wrapping_add(x)
+	(1024 * y).wrapping_add(x)
+}
+
+fn cross_product_z(v0: Point, v1: Point, v2: Point) -> i32 {
+	let result = (v1.x - v0.x) * (v2.y - v0.y) - (v1.y - v0.y) * (v2.x - v0.x);
+	
+	//println!("v0: {v0:?} v1: {v1:?} v2: {v2:?} result: {result}");
+
+	result
+}
+
+fn ensure_vertex_order(v: &mut Vec<Point>) {
+	let cross_product_z = cross_product_z(v[0], v[1], v[2]);
+
+	if cross_product_z < 0 {
+		v.swap(0, 1);
+	}
+}
+
+fn is_inside_triangle(p: Point, v0: Point, v1: Point, v2: Point) -> bool {
+	for (va, vb) in [(v0, v1), (v1, v2), (v2, v0)] {
+		if cross_product_z(va, vb, p) < 0 {
+			return false;
+		}
+	}
+
+	true
 }

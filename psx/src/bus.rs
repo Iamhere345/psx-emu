@@ -1,3 +1,5 @@
+use log::{self, info};
+
 use crate::gpu::Gpu;
 use crate::dma::DmaController;
 
@@ -37,6 +39,9 @@ const EXPANSION2_END: usize = EXPANSION2_START + 0x42;
 const PAD_START: usize = 0x1F801040;
 const PAD_END: usize = 0x1F80104E;
 
+const REDUX_START: usize = 0x1F802080;
+const REDUX_END: usize = 0x1F802084;
+
 const REGION_MASK: [u32; 8] = [
 	// KUSEG 2048Mb
 	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 
@@ -65,8 +70,8 @@ impl Bus {
 	pub fn new(bios: Vec<u8>) -> Self {
 		Self {
 			bios: bios,
-			ram: vec![0xF0; 2048 * 1024],
-			scratchpad: vec![0xF0; 1024],
+			ram: vec![0xDA; 2048 * 1024],
+			scratchpad: vec![0xFA; 1024],
 
 			gpu: Gpu::new(),
 			dma: DmaController::new(),
@@ -113,6 +118,7 @@ impl Bus {
 			IRQ_START	..= IRQ_END => 0,
 			SPU_START	..= SPU_END => 0,
 			PAD_START	..= PAD_END => 0,
+			TIMERS_START..= TIMERS_END => 0,
 
 			_ => panic!("unhandled read16 0x{:X}", addr),
 		}
@@ -127,16 +133,22 @@ impl Bus {
 
 		let masked_addr = mask_addr(addr);
 
-		match masked_addr as usize {
+		let read = match masked_addr as usize {
 			GPU_START	..= GPU_END => self.gpu.read32(addr),
 			DMA_START	..= DMA_END => self.dma.read32(addr),
+			MEMCONTROL_START	..= MEMCONTROL_END => 0,
 			_ => u32::from_le_bytes([
 				self.read8(addr),
 				self.read8(addr + 1),
 				self.read8(addr + 2),
 				self.read8(addr + 3),
-			])
-		}
+			]),
+
+		};
+
+		assert_ne!(read, 0x28b4b4b4);
+
+		read
 		
 	}
 
@@ -178,13 +190,17 @@ impl Bus {
 			SCRATCHPAD_START		..= SCRATCHPAD_END => {
 				self.write8(unmasked_addr, lsb);
 				self.write8(unmasked_addr + 1, msb);
-			}
+			},
+
+			REDUX_START		..= REDUX_END => info!("[0x{unmasked_addr:X}] write 0x{write:X} to redux register"),
 			_ => panic!("[0x{:X}] write16 0x{:X}", unmasked_addr, write),
 		}	
 
 	}
 
 	pub fn write32(&mut self, unmasked_addr: u32, write: u32) {
+
+		assert_ne!(write, 0x28b4b4b4);
 
 		if unmasked_addr % 4 != 0 {
 			panic!("unaligned 32 bit write [0x{:X}] 0x{:X}", unmasked_addr, write);
@@ -227,7 +243,7 @@ impl Bus {
 						let channel = &self.dma.channels[((addr >> 0x4) & 0x7) as usize];
 
 						if channel.active() {
-							println!("triggered DMA{}", channel.channel_num);
+							//println!("triggered DMA{}", channel.channel_num);
 							self.do_dma(channel.channel_num);
 						}
 					},

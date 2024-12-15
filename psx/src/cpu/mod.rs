@@ -97,7 +97,7 @@ impl R3000 {
 
 			delayed_branch: None,
 			in_delay_slot: false,
-			debug: false,
+			debug: true,
 			exception: false,
 
 			tty_buf: String::new(),
@@ -122,9 +122,9 @@ impl R3000 {
 			None => (self.pc.wrapping_add(4), false),
 		};
 
-		if self.debug {
-			println!("[0x{:X}] {}", self.pc, self.dissasemble(Instruction::from_u32(instruction)));
-		}
+		//println!("[0x{:X}] 0x{instruction:X}", self.pc);
+
+		log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus), self.registers);
 
 		self.in_delay_slot = in_delay_slot;
 		
@@ -171,6 +171,8 @@ impl R3000 {
 
 		if (pc == 0xA0 && self.registers.read_gpr(9) == 0x3C) || (pc == 0xB0 && self.registers.read_gpr(9) == 0x3D) {
 			let char = self.registers.read_gpr(4) as u8 as char;
+
+			print!("{char}");
 
 			self.tty_buf.push(char);
 		}

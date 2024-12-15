@@ -25,7 +25,13 @@ impl Desktop {
 		let bios = fs::read(BIOS_PATH).unwrap();
 
 		let mut psx = PSXEmulator::new(bios);
-		//psx.sideload_exe(fs::read("res/MemoryTransfer24BPP.exe").unwrap());
+		// make a version of dma.exe that doesnt factor in timing
+		// probably hanging at https://github.com/grumpycoders/pcsx-redux/blob/3036b5a48fd51f27d41f4d5ec4d61f1e4b283ef2/src/mips/tests/dma/dma.c#L73
+		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/RenderPolygon16BPP.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/bandwidth.exe").unwrap());
+
+		//psx.debug();
 
 		Self {
 			psx: psx,

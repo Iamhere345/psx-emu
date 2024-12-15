@@ -1,11 +1,18 @@
 //#![windows_subsystem = "windows"]
 use eframe::{egui::{Vec2, ViewportBuilder}, NativeOptions};
+use env_logger::*;
+
 use app::Desktop;
 
 pub mod components;
 mod app;
 
 fn main() {
+
+	let mut builder = Builder::from_default_env();
+	builder.target(Target::Stdout);
+
+	builder.init();
 
 	let viewport = ViewportBuilder {
 		inner_size: Some(Vec2::new(1680.0, 720.0)),

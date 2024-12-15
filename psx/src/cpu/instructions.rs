@@ -149,7 +149,7 @@ impl R3000 {
 
 	}
 
-	pub fn dissasemble(&self, instr: Instruction) -> String {
+	pub fn dissasemble(&self, instr: Instruction, bus: &mut Bus) -> String {
 
 		match instr.opcode() {
 
@@ -190,15 +190,15 @@ impl R3000 {
 
 			0x02 => "j".to_string(),
 			0x03 => "jal".to_string(),
-			0x04 => format!("beq ${}, ${}, 0x{:X}", instr.reg_src(), instr.reg_tgt(), instr.imm16_se() << 2),
-			0x05 => format!("bne ${}, ${}, 0x{:X}", instr.reg_src(), instr.reg_tgt(), instr.imm16_se() << 2),
+			0x04 => format!("beq ${}, ${}, 0x{:X} (jmp: 0x{:X})", instr.reg_src(), instr.reg_tgt(), instr.imm16_se() << 2, self.pc.wrapping_add(instr.imm16_se() << 2).wrapping_add(4)),
+			0x05 => format!("bne ${}, ${}, 0x{:X} (jmp: 0x{:X})", instr.reg_src(), instr.reg_tgt(), instr.imm16_se() << 2, self.pc.wrapping_add(instr.imm16_se() << 2).wrapping_add(4)),
 			0x06 => "blez".to_string(),
 			0x07 => "bgtz".to_string(),
 			0x08 => "addi".to_string(),
 			0x09 => format!("addiu ${}, ${}, 0x{:X}", instr.reg_tgt(), instr.reg_src(), instr.imm16_se()),
 			0x0A => "slti".to_string(),
 			0x0B => "sltiu".to_string(),
-			0x0C => "andi".to_string(),
+			0x0C => format!("andi ${}, ${}, 0x{:X}", instr.reg_tgt(), instr.reg_src(), instr.imm16_se()),
 			0x0D => "ori".to_string(),
 			0x0E => "xori".to_string(),
 			0x0F => "lui".to_string(),
@@ -217,7 +217,7 @@ impl R3000 {
 			0x20 => "lb".to_string(),
 			0x21 => "lh".to_string(),
 			0x22 => "lwl".to_string(),
-			0x23 => format!("lw ${}, 0x{:X}(${})", instr.reg_tgt(), instr.imm16_se(), instr.reg_src()),
+			0x23 => format!("lw ${}, 0x{:X}(${}) [0x{:X}](0x{:X})", instr.reg_tgt(), instr.imm16_se(), instr.reg_src(), self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se()), bus.read32(self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se()))),
 			0x24 => "lbu".to_string(),
 			0x25 => "lhu".to_string(),
 			0x26 => "lwr".to_string(),
@@ -755,7 +755,7 @@ impl R3000 {
 	}
 
 	fn op_illegal(&mut self, instr: Instruction) {
-		println!("Illegal instruction 0x{:X} (PC: 0x{:X}) (opcode: 0x{:X} funct: 0x{:X} cop0 opcode: 0x{:X})", instr.raw, self.pc, instr.opcode(), instr.funct(), instr.cop0_opcode());
+		log::error!("Illegal instruction 0x{:X} (PC: 0x{:X}) (opcode: 0x{:X} funct: 0x{:X} cop0 opcode: 0x{:X})", instr.raw, self.pc, instr.opcode(), instr.funct(), instr.cop0_opcode());
 
 		self.exception(Exception::ReservedInstruction);
 	}
