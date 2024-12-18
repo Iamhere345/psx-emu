@@ -1,4 +1,4 @@
-use log::{self, info};
+use log::*;
 
 use crate::gpu::Gpu;
 use crate::dma::DmaController;
@@ -39,9 +39,6 @@ const EXPANSION2_END: usize = EXPANSION2_START + 0x42;
 const PAD_START: usize = 0x1F801040;
 const PAD_END: usize = 0x1F80104E;
 
-const REDUX_START: usize = 0x1F802080;
-const REDUX_END: usize = 0x1F802084;
-
 const REGION_MASK: [u32; 8] = [
 	// KUSEG 2048Mb
 	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 
@@ -71,7 +68,7 @@ impl Bus {
 		Self {
 			bios: bios,
 			ram: vec![0xDA; 2048 * 1024],
-			scratchpad: vec![0xFA; 1024],
+			scratchpad: vec![0xBA; 1024],
 
 			gpu: Gpu::new(),
 			dma: DmaController::new(),
@@ -87,10 +84,10 @@ impl Bus {
 			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START],
 			SCRATCHPAD_START	..SCRATCHPAD_END => self.scratchpad[addr as usize - SCRATCHPAD_START],
 
-			EXPANSION1_START	..= EXPANSION1_END => {println!("read to expansion 1 register 0x{:X}", unmasked_addr); 0xFF},
-			EXPANSION2_START	..= EXPANSION2_END => {println!("read to expansion 2 register 0x{:X}", unmasked_addr); 0},
+			EXPANSION1_START	..= EXPANSION1_END => {info!("read to expansion 1 register 0x{:X}", unmasked_addr); 0xFF},
+			EXPANSION2_START	..= EXPANSION2_END => {info!("read to expansion 2 register 0x{:X}", unmasked_addr); 0},
 
-			SPU_START			..= SPU_END => {println!("read to SPU register 0x{:X}", unmasked_addr); 0},
+			SPU_START			..= SPU_END => {info!("read to SPU register 0x{:X}", unmasked_addr); 0},
 			TIMERS_START		..= TIMERS_END => 0,
 			IRQ_START			..= IRQ_END => 0,
 			GPU_START			..= GPU_END => 0,
@@ -133,7 +130,7 @@ impl Bus {
 
 		let masked_addr = mask_addr(addr);
 
-		let read = match masked_addr as usize {
+		match masked_addr as usize {
 			GPU_START	..= GPU_END => self.gpu.read32(addr),
 			DMA_START	..= DMA_END => self.dma.read32(addr),
 			MEMCONTROL_START	..= MEMCONTROL_END => 0,
@@ -143,12 +140,7 @@ impl Bus {
 				self.read8(addr + 2),
 				self.read8(addr + 3),
 			]),
-
-		};
-
-		assert_ne!(read, 0x28b4b4b4);
-
-		read
+		}
 		
 	}
 
@@ -160,9 +152,9 @@ impl Bus {
 			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START] = write,
 			SCRATCHPAD_START	..= SCRATCHPAD_END => self.scratchpad[addr as usize -  SCRATCHPAD_START] = write,
 
-			SPU_START			..= SPU_END => println!("write to SPU register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
-			TIMERS_START		..= TIMERS_END => {},
-			EXPANSION2_START	..= EXPANSION2_END => println!("write to expansion 2 register [0x{:X}] 0x{:X}. Ignoring.", unmasked_addr, write),
+			SPU_START			..= SPU_END => info!("write to SPU register [0x{addr:X}] 0x{write:X}. Ignoring."),
+			TIMERS_START		..= TIMERS_END => info!("Unhandled write to timers [0x{addr:X} 0x{write:X}. Ignoring"),
+			EXPANSION2_START	..= EXPANSION2_END => info!("write to expansion 2 register [0x{addr:X}] 0x{write:X}. Ignoring."),
 			_ => panic!("unhandled write8 [0x{:X}] 0x{:X}", addr, write)
 		}
 	}
@@ -170,7 +162,7 @@ impl Bus {
 	pub fn write16(&mut self, unmasked_addr: u32, write: u16) {
 
 		if unmasked_addr % 2 != 0 {
-			panic!("unaligned 16 bit write [0x{:X}] 0x{:X}", unmasked_addr, write);
+			panic!("unaligned 16 bit write [0x{unmasked_addr:X}] 0x{write:X}");
 		}
 
 		let [lsb, msb] = write.to_le_bytes();
@@ -192,18 +184,15 @@ impl Bus {
 				self.write8(unmasked_addr + 1, msb);
 			},
 
-			REDUX_START		..= REDUX_END => info!("[0x{unmasked_addr:X}] write 0x{write:X} to redux register"),
-			_ => panic!("[0x{:X}] write16 0x{:X}", unmasked_addr, write),
+			_ => panic!("[0x{unmasked_addr:X}] write16 0x{write:X}"),
 		}	
 
 	}
 
 	pub fn write32(&mut self, unmasked_addr: u32, write: u32) {
 
-		assert_ne!(write, 0x28b4b4b4);
-
 		if unmasked_addr % 4 != 0 {
-			panic!("unaligned 32 bit write [0x{:X}] 0x{:X}", unmasked_addr, write);
+			panic!("unaligned 32 bit write [0x{unmasked_addr:X}] 0x{write:X}");
 		}
 
 		let addr = mask_addr(unmasked_addr);
@@ -226,10 +215,10 @@ impl Bus {
 				match addr as usize - MEMCONTROL_START {
 					0 => if write != 0x1F000000 { panic!("write to expansion 1 base addr 0x{:X}", write) },
 					1 => if write != 0x1F802000 { panic!("write to expansion 2 base addr 0x{:X}", write) },
-					_ => {}//println!("unhandled write to memcontrol [0x{:X}] 0x{:X}", addr as usize - MEMCONTROL_START, write),
+					_ => info!("unhandled write to memcontrol [0x{:X}] 0x{write:X}", addr as usize - MEMCONTROL_START),
 				}
 			}
-			IRQ_START			..= IRQ_END => println!("Unhandled write to IRQ register [0x{:X}] 0x{:X}", addr, write),
+			IRQ_START			..= IRQ_END => info!("Unhandled write to IRQ register [0x{:X}] 0x{:X}", addr, write),
 			TIMERS_START		..= TIMERS_END => {},
 			// io register RAM_SIZE
 			0x1F801060	..= 0x1F801064 => {},
@@ -243,7 +232,7 @@ impl Bus {
 						let channel = &self.dma.channels[((addr >> 0x4) & 0x7) as usize];
 
 						if channel.active() {
-							//println!("triggered DMA{}", channel.channel_num);
+							trace!("triggered DMA{}", channel.channel_num);
 							self.do_dma(channel.channel_num);
 						}
 					},

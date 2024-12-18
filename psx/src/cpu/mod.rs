@@ -81,7 +81,6 @@ pub struct R3000 {
 
 	delayed_branch: Option<u32>,
 	in_delay_slot: bool,
-	pub debug: bool,
 	exception: bool,
 
 	pub tty_buf: String,
@@ -97,7 +96,6 @@ impl R3000 {
 
 			delayed_branch: None,
 			in_delay_slot: false,
-			debug: true,
 			exception: false,
 
 			tty_buf: String::new(),
@@ -122,9 +120,15 @@ impl R3000 {
 			None => (self.pc.wrapping_add(4), false),
 		};
 
-		//println!("[0x{:X}] 0x{instruction:X}", self.pc);
+		/* print!("{:08x} {instruction:08x} ", self.pc);
 
-		log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus), self.registers);
+		for reg in self.registers.gpr {
+			print!("{reg:08x} ")
+		}
+
+		print!("\n"); */
+
+		//log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus), self.registers);
 
 		self.in_delay_slot = in_delay_slot;
 		
@@ -172,7 +176,7 @@ impl R3000 {
 		if (pc == 0xA0 && self.registers.read_gpr(9) == 0x3C) || (pc == 0xB0 && self.registers.read_gpr(9) == 0x3D) {
 			let char = self.registers.read_gpr(4) as u8 as char;
 
-			print!("{char}");
+			//print!("{char}");
 
 			self.tty_buf.push(char);
 		}

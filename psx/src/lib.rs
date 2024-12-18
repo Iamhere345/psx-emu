@@ -27,19 +27,12 @@ impl PSXEmulator {
 
     pub fn tick(&mut self) {
         if self.vblank_counter == 564_480 {
-            //println!("vlbank");
             self.out_vram = self.bus.gpu.vram.clone();
             self.vblank_counter = 0;
         }
 
         self.cpu.run_instruction(&mut self.bus);
-
-        if self.bus.gpu.debug {
-            log::debug!("0x{:X}", self.cpu.pc);
-            self.bus.gpu.debug = false;
-        }
         
-
         self.vblank_counter += 1;
     }
 

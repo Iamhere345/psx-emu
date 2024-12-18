@@ -93,7 +93,7 @@ impl Channel {
 
 	pub fn write32(&mut self, addr: u32, write: u32) {
 
-		//debug!("[DMA{}] write 0x{write:X} to register {}", self.channel_num, (addr >> 0x2) & 0x3);
+		trace!("[DMA{}] write 0x{write:X} to register {}", self.channel_num, (addr >> 0x2) & 0x3);
 
 		match (addr >> 0x2) & 0x3 {
 			0 => self.base_addr = write,
@@ -102,9 +102,7 @@ impl Channel {
 				self.block_amount = (write >> 16) as u16;
 			},
 			// channel control register
-			2 => {
-				//debug!("DMA{}: write 0x{write:X} to channel control register (0x{addr:X})", self.channel_num);
-				
+			2 => {				
 				self.transfer_active = (write >> 24) & 1 != 0;
 				self.manual_trigger = (write >> 28) & 1 != 0;
 
@@ -139,7 +137,7 @@ impl Channel {
 
 				self.pause_transfer = (write >> 29) & 1 != 0;
 				
-				//debug!("DMA{}: new control {self:X?}", self.channel_num);
+				trace!("DMA{}: new control {self:X?} (write 0x{write:X})", self.channel_num);
 
 			},
 			_ => unreachable!()
@@ -237,7 +235,7 @@ impl DmaInterruptRegister {
 
 	pub fn write(&mut self, write: u32) {
 
-		self.int_cond = (write & 0x3F) as u8;
+		self.int_cond = (write & 0x7F) as u8;
 		self.bus_error = (write >> 15) & 0x1 != 0;
 		self.channel_mask = ((write >> 16) & 0x7F) as u8;
 		self.master_enable = (write >> 23) & 0x1 != 0;
@@ -296,7 +294,7 @@ impl DmaController {
 impl Bus {
 	pub fn do_dma(&mut self, channel: usize) {
 
-		//println!("doing DMA{channel} {:?}", self.dma.channels[channel].sync_mode);
+		trace!("doing DMA{channel} {:?}", self.dma.channels[channel].sync_mode);
 
 		if !self.dma.control.channel_enable[channel] {
 			info!("triggered DMA{channel} when disabled in control reg");
@@ -319,7 +317,7 @@ impl Bus {
 		assert_eq!(channel_num, 2);
 		assert_eq!(self.dma.channels[channel_num].transfer_dir, DmaDirection::FromRam);
 		
-		debug!("start linked list DMA{channel_num} step: {:?}", self.dma.channels[channel_num].step_dir);
+		trace!("start linked list DMA{channel_num} step: {:?}", self.dma.channels[channel_num].step_dir);
 
 		let channel = self.dma.channels[channel_num].clone();
 
@@ -331,27 +329,21 @@ impl Bus {
 			let words_to_send = header >> 24;
 			let next_addr = header & 0xFFFFFF;
 
-			debug!("node: 0x{header:X} word count: 0x{words_to_send:X} next addr: 0x{next_addr:X}");
-
-			//println!("words to send: {words_to_send}");
+			trace!("node: 0x{header:X} word count: 0x{words_to_send:X} next addr: 0x{next_addr:X}");
 
 			for i in 0..words_to_send {
 
 				let data = self.read32( addr.wrapping_add(4 * (i + 1)));
 				self.gpu.gp0_cmd(data);
 
-				debug!("[0x{i:X}] linked list write 0x{data:X} to GP0");
+				trace!("[0x{i:X}] linked list write 0x{data:X} to GP0");
 			}
 
 			addr = next_addr;
 
-			//println!("next node is 0x{next_addr:X}");
-
 			// the end node only needs bit 23 to be set
 			if next_addr & (1 << 23) != 0 {
-			//if addr & 0x800000 != 0 {
-			//if next_addr == 0xFFFFFF {
-				debug!("linked list end (old addr is 0x{addr:X})");
+				trace!("linked list end (old addr is 0x{addr:X})");
 				break;
 			}
 
@@ -371,14 +363,14 @@ impl Bus {
 			dma_len = 0x10000;
 		}
 
-		debug!("DMA6 len: 0x{dma_len:X} start: 0x{addr:X}");
+		trace!("DMA6 len: 0x{dma_len:X} start: 0x{addr:X}");
 		
 		for i in 0..dma_len {
 
 			//println!("[0x{addr:X}] writing OTC");
 			
 			let next_addr = if i == dma_len - 1 {
-				debug!("DMA6 end: 0x{addr:X}");
+				trace!("DMA6 end: 0x{addr:X}");
 				0xFFFFFF
 			} else {
 				addr.wrapping_sub(4) & 0x1FFFFF
@@ -419,7 +411,7 @@ impl Bus {
 
 					match channel_num {
 						CHANNEL_GPU => {
-							debug!("dma block write 0x{word:X} to GP0");
+							trace!("dma block write 0x{word:X} to GP0");
 							self.gpu.gp0_cmd(word);
 						},
 						_ => todo!("FromRam DMA{channel_num}")

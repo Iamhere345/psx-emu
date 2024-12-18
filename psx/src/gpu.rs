@@ -84,10 +84,6 @@ impl Point {
 	} 
 }
 
-struct Gpustat {
-
-}
-
 pub struct Gpu {
 	pub vram: Box<[u16]>,
 
@@ -97,13 +93,10 @@ pub struct Gpu {
 	gp1_state: GP1State,
 	gp1_params: [u32; 16],
 
-	reg_gpustat: u32,
 	reg_gpuread: u32,
 
 	draw_area_top_left: Point,
 	draw_area_bottom_right: Point,
-
-	pub debug: bool,
 }
 
 impl Gpu {
@@ -117,13 +110,10 @@ impl Gpu {
 			gp1_state: GP1State::WaitingForNextCmd,
 			gp1_params: [0; 16],
 
-			reg_gpustat: 0b01011110100000000000000000000000,
 			reg_gpuread: 0,
 
 			draw_area_top_left: Point::new(0, 0),
 			draw_area_bottom_right: Point::new(0, 0),
-
-			debug: false
 		}
 	}
 
@@ -150,34 +140,12 @@ impl Gpu {
 	}
 
 	fn gpustat(&mut self) -> u32 {
-		let read_to_recv_cmd = matches!(self.gp0_state, GP0State::WaitingForNextCmd);
-		let ready_to_send_vram = matches!(self.gp0_state, GP0State::SendData(_));
-		let ready_to_recv_dma_block = match self.gp0_state {
-			GP0State::WaitingForNextCmd => true,
-			GP0State::RecvData(_) => true,
-			GP0State::SendData(_) => true,
-			_ => false,
-		};
-
-		debug!("***READ GPUSTAT***");
-		self.debug = true;
-
-		//(1 << 25)
-			/* (u32::from(read_to_recv_cmd) << 26)
-			| (u32::from(true) << 27)
-			| (u32::from(ready_to_recv_dma_block) << 28)
-			| (0b10 << 29) */
-			0b01011110100000000000000000000000
-			//0x1C000000
-			//0xFF000000
-			//0x5e800000
-			//0x9C00020A
-
+		0x1C000000
 	}
 
 	pub fn gp0_cmd(&mut self, word: u32) {
 
-		debug!("GP0: 0x{word:X} state: {:?}", self.gp0_state);
+		trace!("GP0: 0x{word:X} state: {:?}", self.gp0_state);
 
 		self.gp0_state = match self.gp0_state {
 
@@ -218,18 +186,16 @@ impl Gpu {
 						semi_transparent: (word >> 25) & 1 != 0,
 						raw_texture: (word >> 24) & 1 != 0,
 						colour: Colour::from_rgb(
-							(word >> 0) as u8,
-							(word >> 8) as u8,
-							(word >> 16) as u8
+							((word & 0xFF) >> 3) as u8,
+							(((word >> 8) & 0xFF) >> 3) as u8,
+							(((word >> 16) & 0xFF) >> 3) as u8
 						)
 					};
 
-					let words_per_vertex = 1 + u8::from(textured) + u8::from(gouraud_shading);
-					//let words_left = vertices * words_per_vertex + u8::from(!gouraud_shading);
 					let words_left = vertices * (1 + u8::from(textured))
 						+ (vertices - 1) * u8::from(gouraud_shading);
 
-					debug!("start polygon words left {words_left} verts: {vertices} textured: {textured} shaded: {gouraud_shading} colour: {:?}", params.colour);
+					trace!("start polygon words left {words_left} verts: {vertices} textured: {textured} shaded: {gouraud_shading} colour: {:?}", params.colour);
 
 					GP0State::WaitingForParams { command: DrawCommand::DrawPolygon(params), index: 0, words_left: words_left }
 				},
@@ -273,7 +239,7 @@ impl Gpu {
 			GP0State::WaitingForParams { command, index, words_left } => {
 
 				self.gp0_params[index as usize] = word;
-				debug!("(write 0x{word:X}) words left {}", words_left - 1);
+				trace!("(write 0x{word:X}) words left {}", words_left - 1);
 
 				if words_left == 1 {
 					self.exec_cmd(command)
@@ -308,6 +274,8 @@ impl Gpu {
 				GP0State::RecvData(info)
 			},
 			DrawCommand::VramCpuDma => {
+				// FIXME
+				return GP0State::WaitingForNextCmd;
 				let info = self.init_dma();
 
 				GP0State::SendData(info)

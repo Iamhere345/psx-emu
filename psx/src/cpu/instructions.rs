@@ -149,6 +149,7 @@ impl R3000 {
 
 	}
 
+	#[allow(dead_code)]
 	pub fn dissasemble(&self, instr: Instruction, bus: &mut Bus) -> String {
 
 		match instr.opcode() {
