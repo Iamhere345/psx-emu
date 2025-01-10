@@ -25,7 +25,7 @@ enum GP1State {
 
 #[derive(Debug, Clone, Copy)]
 struct PolygonCmdParams {
-	shaded: bool,	// true: gouraud false: flat
+	shaded: bool,			// true: gouraud false: flat
 	vertices: u8,			// 3 / 4
 	textured: bool,
 	semi_transparent: bool,
@@ -45,7 +45,7 @@ struct VramDmaInfo {
 	current_col: u16,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct Colour {
 	r: u8,
 	g: u8,
@@ -56,32 +56,38 @@ impl Colour {
 	fn from_rgb(r: u8, g: u8, b: u8) -> Self {
 		Self { r, g, b }
 	}
+
+	fn rgb888_to_rgb555(word: u32) -> Self {
+		Self {
+			r: ((word & 0xFF) >> 3) as u8,
+			g: (((word >> 8) & 0xFF) >> 3) as u8,
+			b: (((word >> 16) & 0xFF) >> 3) as u8
+		}
+	}
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Point {
+#[derive(Debug, Clone, Copy, Default)]
+struct Vertex {
 	x: i32,
-	y: i32
+	y: i32,
+	colour: Colour,
 }
 
-impl Point {
+impl Vertex {
 	fn new(x: i32, y: i32) -> Self {
 		Self {
 			x: x,
-			y: y
+			y: y,
+			colour: Colour::default()
 		}
 	}
-	// FIXME this is probably wrong; check nocash gpu attributes
 	fn from_packet(packet: u32) -> Self {
-		/* Self {
-			x: (packet & 0x7FF) as i32,
-			y: ((packet >> 16) & 0x7FF) as i32
-		} */
 		Self {
 			x: ((packet as i32) << 21) >> 21,
-			y: (((packet >> 16) as i32) << 21) >> 21
+			y: (((packet >> 16) as i32) << 21) >> 21,
+			colour: Colour::default()
 		}
-	} 
+	}
 }
 
 pub struct Gpu {
@@ -95,8 +101,8 @@ pub struct Gpu {
 
 	reg_gpuread: u32,
 
-	draw_area_top_left: Point,
-	draw_area_bottom_right: Point,
+	draw_area_top_left: Vertex,
+	draw_area_bottom_right: Vertex,
 }
 
 impl Gpu {
@@ -112,8 +118,8 @@ impl Gpu {
 
 			reg_gpuread: 0,
 
-			draw_area_top_left: Point::new(0, 0),
-			draw_area_bottom_right: Point::new(0, 0),
+			draw_area_top_left: Vertex::new(0, 0),
+			draw_area_bottom_right: Vertex::new(0, 0),
 		}
 	}
 
@@ -209,10 +215,10 @@ impl Gpu {
 					0xE1 => { debug!("set draw mode"); GP0State::WaitingForNextCmd },
 					//set drawing area top left
 					0xE3 => {
-						self.draw_area_top_left = Point {
-							x: (word & 0x3FF) as i32,
-							y: ((word >> 10) & 0x1FF) as i32
-						};
+						self.draw_area_top_left = Vertex::new(
+							(word & 0x3FF) as i32,
+							((word >> 10) & 0x1FF) as i32
+						);
 
 						debug!("draw area top left: {:?}", self.draw_area_top_left);
 
@@ -220,10 +226,10 @@ impl Gpu {
 					},
 					// set drawing area bottom right
 					0xE4 => {
-						self.draw_area_bottom_right = Point {
-							x: (word & 0x3FF) as i32,
-							y: ((word >> 10) & 0x1FF) as i32
-						};
+						self.draw_area_bottom_right = Vertex::new(
+							(word & 0x3FF) as i32,
+							((word >> 10) & 0x1FF) as i32
+						);
 
 						debug!("draw area bottom right: {:?} word: 0x{word:X}", self.draw_area_bottom_right);
 
@@ -464,41 +470,31 @@ impl Gpu {
 
 	fn draw_polygon(&mut self, cmd: PolygonCmdParams) {
 
-		let mut v: Vec<Point> = Vec::new();
+		let mut v = [Vertex::default(); 4];
 
-		if cmd.shaded && cmd.textured {
-			v.push(Point::from_packet(self.gp0_params[0]));
-			v.push(Point::from_packet(self.gp0_params[3]));
-			v.push(Point::from_packet(self.gp0_params[6]));
+		let shaded = usize::from(cmd.shaded);
+		let textured = usize::from(cmd.textured);
 
-			if cmd.vertices == 4 {
-				v.push(Point::from_packet(self.gp0_params[9]));
-			}
-		} else if cmd.shaded || cmd.textured {
-			v.push(Point::from_packet(self.gp0_params[0]));
-			v.push(Point::from_packet(self.gp0_params[2]));
-			v.push(Point::from_packet(self.gp0_params[4]));
+		let vertex_offset = 1 + (textured | shaded) + (textured & shaded);
+		let colour_offset = shaded * (2 + textured);
 
-			if cmd.vertices == 4 {
-				v.push(Point::from_packet(self.gp0_params[6]));
-			}
-		} else {
-			v.push(Point::from_packet(self.gp0_params[0]));
-			v.push(Point::from_packet(self.gp0_params[1]));
-			v.push(Point::from_packet(self.gp0_params[2]));
+		v[0] = Vertex::from_packet(self.gp0_params[0]);
+		v[0].colour = cmd.colour;
 
-			if cmd.vertices == 4 {
-				v.push(Point::from_packet(self.gp0_params[3]));
-			}
-		}
+		v[1] = Vertex::from_packet(self.gp0_params[1 * vertex_offset]);
+		v[1].colour = Colour::rgb888_to_rgb555(self.gp0_params[1 + 0 * colour_offset]);
+
+		v[2] = Vertex::from_packet(self.gp0_params[2 * vertex_offset]);
+		v[2].colour = Colour::rgb888_to_rgb555(self.gp0_params[1 + 1 * colour_offset]);
 
 		ensure_vertex_order(&mut v);
-
 		self.draw_triangle(v[0], v[1], v[2], cmd);
 
 		if cmd.vertices == 4 {
-			
-			let mut v2 = vec![v[1], v[2], v[3]];
+			v[3] = Vertex::from_packet(self.gp0_params[3 * vertex_offset]);
+			v[3].colour = Colour::rgb888_to_rgb555(self.gp0_params[1 + 2 * colour_offset]);
+
+			let mut v2 = [v[1], v[2], v[3]];
 			ensure_vertex_order(&mut v2);
 
 			self.draw_triangle(v2[0], v2[1], v2[2], cmd);
@@ -506,7 +502,7 @@ impl Gpu {
 
 	}
 
-	fn draw_triangle(&mut self, v0: Point, v1: Point, v2: Point, cmd: PolygonCmdParams) {
+	fn draw_triangle(&mut self, v0: Vertex, v1: Vertex, v2: Vertex, cmd: PolygonCmdParams) {
 		// compute polygon bounding box
 		let mut min_x = cmp::min(v0.x, cmp::min(v1.x, v2.x));
 		let mut max_x = cmp::max(v0.x, cmp::max(v1.x, v2.x));
@@ -523,45 +519,99 @@ impl Gpu {
 			return;
 		}
 
-		let draw_colour = u16::from(cmd.colour.r) | (u16::from(cmd.colour.g) << 5) | (u16::from(cmd.colour.b) << 10);
-
 		for y in min_y..=max_y {
 			for x in min_x..=max_x {
 
-				if is_inside_triangle(Point::new(x, y), v0, v1, v2) {
+				if is_inside_triangle(Vertex::new(x, y), v0, v1, v2) {
+					let point_colour = if cmd.shaded {
+						let coords = compute_barycentric_coords(Vertex::new(x, y), v0, v1, v2);
+						interpolate_colour(coords, [v0.colour, v1.colour, v2.colour])
+					} else {
+						cmd.colour
+					};
+
+					let draw_colour = u16::from(point_colour.r) | (u16::from(point_colour.g) << 5) | (u16::from(point_colour.b) << 10);
 					self.vram[coord_to_vram_index(x as u32, y as u32) as usize] = draw_colour;
 				}
 			}
 		}
 	}
+	
 }
 
 fn coord_to_vram_index(x: u32, y: u32) -> u32 {
 	(1024 * y).wrapping_add(x)
 }
 
-fn cross_product_z(v0: Point, v1: Point, v2: Point) -> i32 {
+fn cross_product_z(v0: Vertex, v1: Vertex, v2: Vertex) -> i32 {
 	let result = (v1.x - v0.x) * (v2.y - v0.y) - (v1.y - v0.y) * (v2.x - v0.x);
 	
-	//println!("v0: {v0:?} v1: {v1:?} v2: {v2:?} result: {result}");
-
 	result
 }
 
-fn ensure_vertex_order(v: &mut Vec<Point>) {
+fn ensure_vertex_order(v: &mut [Vertex]) -> bool {
 	let cross_product_z = cross_product_z(v[0], v[1], v[2]);
 
 	if cross_product_z < 0 {
 		v.swap(0, 1);
+		return true;
 	}
+
+	false
 }
 
-fn is_inside_triangle(p: Point, v0: Point, v1: Point, v2: Point) -> bool {
+fn is_inside_triangle(p: Vertex, v0: Vertex, v1: Vertex, v2: Vertex) -> bool {
 	for (va, vb) in [(v0, v1), (v1, v2), (v2, v0)] {
-		if cross_product_z(va, vb, p) < 0 {
+
+		let cpz = cross_product_z(va, vb, p);
+
+		if cpz < 0 {
 			return false;
+		}
+
+		// P lies on an edge, only rasterize if its on a top/left edge
+		if cpz == 0 {
+
+			// right edge
+			if vb.y > va.y {
+				return false;
+			}
+
+			// bottom edge
+			if va.y == vb.y && vb.x < va.x {
+				return false;
+			}
+
 		}
 	}
 
 	true
+}
+
+fn compute_barycentric_coords(p: Vertex, v0: Vertex, v1: Vertex, v2: Vertex) -> [f64; 3] {
+	let denominator = cross_product_z(v0, v1, v2);
+    if denominator == 0 {
+        return [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
+    }
+
+    let denominator: f64 = denominator.into();
+
+    let lambda0 = f64::from(cross_product_z(v1, v2, p)) / denominator;
+    let lambda1 = f64::from(cross_product_z(v2, v0, p)) / denominator;
+
+    let lambda2 = 1.0 - lambda0 - lambda1;
+
+    [lambda0, lambda1, lambda2]
+}
+
+fn interpolate_colour(lambda: [f64; 3], point_colours: [Colour; 3]) -> Colour {
+	let colours_r = point_colours.map(|colour| f64::from(colour.r));
+	let colours_g = point_colours.map(|colour| f64::from(colour.g));
+	let colours_b = point_colours.map(|colour| f64::from(colour.b));
+
+	let r = (lambda[0] * colours_r[0] + lambda[1] * colours_r[1] + lambda[2] * colours_r[2]).round() as u8;
+	let g = (lambda[0] * colours_g[0] + lambda[1] * colours_g[1] + lambda[2] * colours_g[2]).round() as u8;
+	let b = (lambda[0] * colours_b[0] + lambda[1] * colours_b[1] + lambda[2] * colours_b[2]).round() as u8;
+
+	Colour::from_rgb(r, g, b)
 }

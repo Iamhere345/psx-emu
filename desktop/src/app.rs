@@ -27,7 +27,7 @@ impl Desktop {
 		let mut psx = PSXEmulator::new(bios);
 		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/RenderPolygon16BPP.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/bandwidth.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/triangle.exe").unwrap());
 
 		Self {
 			psx: psx,
@@ -42,7 +42,7 @@ impl Desktop {
 }
 
 impl App for Desktop {
-	fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
 		if !self.control.paused {
 			for _ in 0..CYCLES_PER_SECOND {
