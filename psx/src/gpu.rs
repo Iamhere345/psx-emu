@@ -280,8 +280,6 @@ impl Gpu {
 				GP0State::RecvData(info)
 			},
 			DrawCommand::VramCpuDma => {
-				// FIXME
-				return GP0State::WaitingForNextCmd;
 				let info = self.init_dma();
 
 				GP0State::SendData(info)
@@ -384,13 +382,14 @@ impl Gpu {
 				info.current_col = 0;
 				info.current_row += 1;
 
-				if info.current_row == info.height {
-					self.gp0_state = GP0State::WaitingForNextCmd;
-				} else {
-					self.gp0_state = GP0State::SendData(info);
-				}
 			}
+			
+		}
 
+		if info.current_row == info.height {
+			self.gp0_state = GP0State::WaitingForNextCmd;
+		} else {
+			self.gp0_state = GP0State::SendData(info);
 		}
 
 		(u32::from(result[0]) << 16) | u32::from(result[1])

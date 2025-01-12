@@ -26,7 +26,7 @@ impl Desktop {
 
 		let mut psx = PSXEmulator::new(bios);
 		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/RenderPolygon16BPP.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/MemoryTransfer16BPP.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/triangle.exe").unwrap());
 
 		Self {

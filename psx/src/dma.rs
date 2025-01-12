@@ -329,21 +329,21 @@ impl Bus {
 			let words_to_send = header >> 24;
 			let next_addr = header & 0xFFFFFF;
 
-			trace!("node: 0x{header:X} word count: 0x{words_to_send:X} next addr: 0x{next_addr:X}");
+			//trace!("node: 0x{header:X} word count: 0x{words_to_send:X} next addr: 0x{next_addr:X}");
 
 			for i in 0..words_to_send {
 
 				let data = self.read32( addr.wrapping_add(4 * (i + 1)));
 				self.gpu.gp0_cmd(data);
 
-				trace!("[0x{i:X}] linked list write 0x{data:X} to GP0");
+				//trace!("[0x{i:X}] linked list write 0x{data:X} to GP0");
 			}
 
 			addr = next_addr;
 
 			// the end node only needs bit 23 to be set
 			if next_addr & (1 << 23) != 0 {
-				trace!("linked list end (old addr is 0x{addr:X})");
+				//trace!("linked list end (old addr is 0x{addr:X})");
 				break;
 			}
 
