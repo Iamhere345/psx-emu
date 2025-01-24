@@ -25,8 +25,8 @@ impl Desktop {
 		let bios = fs::read(BIOS_PATH).unwrap();
 
 		let mut psx = PSXEmulator::new(bios);
-		//psx.sideload_exe(fs::read("res/HelloWorld16BPP.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/RenderTexturePolygon15BPP.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/psxtest_cpu.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/RenderTexturePolygonCLUT4BPP.exe").unwrap());
 
 		Self {

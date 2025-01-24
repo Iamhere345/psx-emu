@@ -225,7 +225,6 @@ impl Gpu {
 				}
 
 				1 => {
-
 					let gouraud_shading = (word >> 28) & 1 != 0;
 					let vertices = if (word >> 27) & 1 != 0 { 4 } else { 3 };
 					let textured = (word >> 26) & 1 != 0;

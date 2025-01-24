@@ -2,6 +2,7 @@ use log::*;
 
 use crate::gpu::Gpu;
 use crate::dma::DmaController;
+use crate::interrupts::Interrupts;
 
 const BIOS_START: usize = 0x1FC00000;
 const BIOS_END: usize = BIOS_START + (512 * 1024);
@@ -16,7 +17,7 @@ const MEMCONTROL_START: usize = 0x1F801000;
 const MEMCONTROL_END: usize = 0x1F801000 + 36;
 
 const IRQ_START: usize = 0x1F801070;
-const IRQ_END: usize = IRQ_START + 8;
+const IRQ_END: usize = 0x1F801074;
 
 const SPU_START: usize = 0x1F801C00;
 const SPU_END: usize = SPU_START + 0x280;
@@ -57,6 +58,7 @@ pub struct Bus {
 
 	pub gpu: Gpu,
 	pub dma: DmaController,
+	pub interrupts: Interrupts,
 }
 
 fn mask_addr(addr: u32) -> u32 {
@@ -72,6 +74,7 @@ impl Bus {
 
 			gpu: Gpu::new(),
 			dma: DmaController::new(),
+			interrupts: Interrupts::new()
 		}
 	}
 
@@ -89,7 +92,6 @@ impl Bus {
 
 			SPU_START			..= SPU_END => {info!("read to SPU register 0x{:X}", unmasked_addr); 0},
 			TIMERS_START		..= TIMERS_END => 0,
-			IRQ_START			..= IRQ_END => 0,
 			GPU_START			..= GPU_END => 0,
 			PAD_START 			..= PAD_END => 0,
 
@@ -112,7 +114,7 @@ impl Bus {
 				self.read8(unmasked_addr + 1)
 			]),
 			
-			IRQ_START	..= IRQ_END => 0,
+			IRQ_START	..= IRQ_END => self.interrupts.read32(addr) as u16,
 			SPU_START	..= SPU_END => 0,
 			PAD_START	..= PAD_END => 0,
 			TIMERS_START..= TIMERS_END => 0,
@@ -122,18 +124,19 @@ impl Bus {
 
 	}
 
-	pub fn read32(&mut self, addr: u32) -> u32 {
+	pub fn read32(&mut self, unmasked_addr: u32) -> u32 {
 
-		if addr % 4 != 0 {
-			panic!("unaligned 32 bit read at addr 0x{:X}", addr);
+		if unmasked_addr % 4 != 0 {
+			panic!("unaligned 32 bit read at addr 0x{:X}", unmasked_addr);
 		}
 
-		let masked_addr = mask_addr(addr);
+		let addr = mask_addr(unmasked_addr);
 
-		match masked_addr as usize {
-			GPU_START	..= GPU_END => self.gpu.read32(addr),
-			DMA_START	..= DMA_END => self.dma.read32(addr),
+		match addr as usize {
+			GPU_START			..= GPU_END => self.gpu.read32(addr),
+			DMA_START			..= DMA_END => self.dma.read32(addr),
 			MEMCONTROL_START	..= MEMCONTROL_END => 0,
+			IRQ_START			..= IRQ_END => self.interrupts.read32(addr),
 			_ => u32::from_le_bytes([
 				self.read8(addr),
 				self.read8(addr + 1),
@@ -170,7 +173,7 @@ impl Bus {
 		let addr = mask_addr(unmasked_addr);
 
 		match addr as usize {
-			IRQ_START		..= IRQ_END => {}
+			IRQ_START		..= IRQ_END => self.interrupts.write32(addr, write as u32),
 			SPU_START		..=	SPU_END => {}
 			TIMERS_START	..= TIMERS_END => {}
 			PAD_START ..= PAD_END => {},
@@ -218,7 +221,7 @@ impl Bus {
 					_ => info!("unhandled write to memcontrol [0x{:X}] 0x{write:X}", addr as usize - MEMCONTROL_START),
 				}
 			}
-			IRQ_START			..= IRQ_END => info!("Unhandled write to IRQ register [0x{:X}] 0x{:X}", addr, write),
+			IRQ_START			..= IRQ_END => self.interrupts.write32(addr, write),
 			TIMERS_START		..= TIMERS_END => {},
 			// io register RAM_SIZE
 			0x1F801060	..= 0x1F801064 => {},

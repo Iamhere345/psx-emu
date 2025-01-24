@@ -778,9 +778,7 @@ impl R3000 {
 			panic!("invalid cop0 encoding: 0x{:X}", instr.raw);
 		}
 
-		let mode = self.cop0.reg_sr & 0x3F;
-		self.cop0.reg_sr &= !0xF;
-		self.cop0.reg_sr |= mode >> 2;
+		self.cop0.reg_sr.pop_exception();
 
 	}
 

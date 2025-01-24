@@ -120,6 +120,18 @@ impl R3000 {
 			None => (self.pc.wrapping_add(4), false),
 		};
 
+		self.in_delay_slot = in_delay_slot;
+
+		self.cop0.reg_cause.set_hw_interrupt(bus.interrupts.triggered());
+		if self.cop0.interrupt_pending() {
+
+			// TODO GTE instructions need to be run before the interrupt is serviced
+			self.exception(Exception::Interrupt);
+
+		} else {
+			self.decode_and_exec(Instruction::from_u32(instruction), bus);
+		}
+
 		/* print!("{:08x} {instruction:08x} ", self.pc);
 
 		for reg in self.registers.gpr {
@@ -127,12 +139,7 @@ impl R3000 {
 		}
 
 		print!("\n"); */
-
 		//log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus), self.registers);
-
-		self.in_delay_slot = in_delay_slot;
-		
-		self.decode_and_exec(Instruction::from_u32(instruction), bus);
 		
 		self.registers.process_delayed_loads();
 
@@ -147,20 +154,17 @@ impl R3000 {
 	fn exception(&mut self, exception: Exception) {
 
 		// TODO: other cause fields
-		self.cop0.reg_cause = (exception as u32) << 2;
+		self.cop0.reg_cause.exception = exception;
 
 		self.cop0.reg_epc = match self.in_delay_slot {
-			true => {self.cop0.reg_cause |= 1 << 31; self.pc.wrapping_sub(4)},
-			false => self.pc
+			true => {self.cop0.reg_cause.branch_delay = true; self.pc.wrapping_sub(4)},
+			false => {self.cop0.reg_cause.branch_delay = false; self.pc}
 		};
 
-		// SR exception stack (3 user/mode entries)
-		// bits 5:0
-		let mode = self.cop0.reg_sr & 0x3F;
-		self.cop0.reg_sr &= !0x3F;
-		self.cop0.reg_sr |= (mode << 2) & 0x3F;
 
-		self.pc = match self.cop0.reg_sr & (1 << 22) != 0  {
+		self.cop0.reg_sr.push_exception();
+
+		self.pc = match self.cop0.reg_sr.boot_exception_vector {
 			true => 0xBFC00180,
 			false => 0x80000080,
 		};
