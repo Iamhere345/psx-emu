@@ -24,8 +24,9 @@ impl Desktop {
 
 		let bios = fs::read(BIOS_PATH).unwrap();
 
+		#[allow(unused_mut)]
 		let mut psx = PSXEmulator::new(bios);
-		//psx.sideload_exe(fs::read("res/psxtest_cpu.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/VBLANK.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/RenderTexturePolygonCLUT4BPP.exe").unwrap());
 
@@ -45,9 +46,10 @@ impl App for Desktop {
 	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
 		if !self.control.paused {
-			for _ in 0..CYCLES_PER_SECOND {
-				self.psx.tick();
-			}
+			//for _ in 0..CYCLES_PER_SECOND {
+				//self.psx.tick();
+			//}
+			self.psx.run_frame();
 		}
 		
 		if self.control_open {

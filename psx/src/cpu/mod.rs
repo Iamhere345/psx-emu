@@ -123,11 +123,10 @@ impl R3000 {
 		self.in_delay_slot = in_delay_slot;
 
 		self.cop0.reg_cause.set_hw_interrupt(bus.interrupts.triggered());
-		if self.cop0.interrupt_pending() {
-
+		if self.cop0.interrupt_pending() && self.cop0.reg_sr.cur_int_enable {
+			log::trace!("interrupt");
 			// TODO GTE instructions need to be run before the interrupt is serviced
 			self.exception(Exception::Interrupt);
-
 		} else {
 			self.decode_and_exec(Instruction::from_u32(instruction), bus);
 		}

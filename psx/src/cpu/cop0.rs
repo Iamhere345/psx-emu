@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use log::*;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub enum Exception {
 	#[default]
@@ -60,6 +62,7 @@ impl StatusRegister {
 		self.old_int_enable = (write >> 4) & 1 != 0;
 		self.old_usr_mode = (write >> 5) & 1 != 0;
 
+		trace!("set int mask: 0b{:b}", (write >> 8) as u8);
 		self.interrupt_mask = (write >> 8) as u8;
 		self.boot_exception_vector = (write >> 22) & 1 != 0;
 
@@ -115,7 +118,7 @@ impl CauseRegister {
 	}
 
 	pub fn set_hw_interrupt(&mut self, set: bool) {
-		self.interrupt_pending = (self.interrupt_pending & 3) | (u8::from(set) << 3);
+		self.interrupt_pending = (self.interrupt_pending & 3) | (u8::from(set) << 2);
 	}
 }
 
