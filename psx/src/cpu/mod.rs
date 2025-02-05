@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::bus::Bus;
+use crate::{bus::Bus, scheduler::Scheduler};
 use cop0::*;
 use instructions::Instruction;
 
@@ -102,7 +102,7 @@ impl R3000 {
 		}
 	}
 
-	pub fn run_instruction(&mut self, bus: &mut Bus) {
+	pub fn run_instruction(&mut self, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		self.check_tty_putchar();
 
@@ -113,7 +113,7 @@ impl R3000 {
 			return;
 		}
 
-		let instruction = bus.read32(self.pc);
+		let instruction = bus.read32(self.pc, scheduler);
 
 		let (next_pc, in_delay_slot) = match self.delayed_branch.take() {
 			Some(addr) => (addr, true),
@@ -128,7 +128,7 @@ impl R3000 {
 			// TODO GTE instructions need to be run before the interrupt is serviced
 			self.exception(Exception::Interrupt);
 		} else {
-			self.decode_and_exec(Instruction::from_u32(instruction), bus);
+			self.decode_and_exec(Instruction::from_u32(instruction), bus, scheduler);
 		}
 
 		/* print!("{:08x} {instruction:08x} ", self.pc);
@@ -138,7 +138,7 @@ impl R3000 {
 		}
 
 		print!("\n"); */
-		//log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus), self.registers);
+		//log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus, scheduler), self.registers);
 		
 		self.registers.process_delayed_loads();
 

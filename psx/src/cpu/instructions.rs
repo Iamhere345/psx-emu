@@ -1,4 +1,4 @@
-use crate::bus::Bus;
+use crate::{bus::Bus, scheduler::Scheduler};
 
 use super::{Exception, R3000};
 
@@ -57,7 +57,7 @@ impl Instruction {
 }
 
 impl R3000 {
-	pub fn decode_and_exec(&mut self, instr: Instruction, bus: &mut Bus) {
+	pub fn decode_and_exec(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		match instr.opcode() {
 
@@ -122,18 +122,18 @@ impl R3000 {
 			0x12 => self.op_gte(instr),
 			0x13 => self.op_copn(),
 
-			0x20 => self.op_lb(instr, bus),
-			0x21 => self.op_lh(instr, bus),
-			0x22 => self.op_lwl(instr, bus),
-			0x23 => self.op_lw(instr, bus),
-			0x24 => self.op_lbu(instr, bus),
-			0x25 => self.op_lhu(instr, bus),
-			0x26 => self.op_lwr(instr, bus),
-			0x28 => self.op_sb(instr, bus),
-			0x29 => self.op_sh(instr, bus),
-			0x2A => self.op_swl(instr, bus),
-			0x2B => self.op_sw(instr, bus),
-			0x2E => self.op_swr(instr, bus),
+			0x20 => self.op_lb(instr, bus, scheduler),
+			0x21 => self.op_lh(instr, bus, scheduler),
+			0x22 => self.op_lwl(instr, bus, scheduler),
+			0x23 => self.op_lw(instr, bus, scheduler),
+			0x24 => self.op_lbu(instr, bus, scheduler),
+			0x25 => self.op_lhu(instr, bus, scheduler),
+			0x26 => self.op_lwr(instr, bus, scheduler),
+			0x28 => self.op_sb(instr, bus, scheduler),
+			0x29 => self.op_sh(instr, bus, scheduler),
+			0x2A => self.op_swl(instr, bus, scheduler),
+			0x2B => self.op_sw(instr, bus, scheduler),
+			0x2E => self.op_swr(instr, bus, scheduler),
 
 			0x30 => self.op_lwcn(),
 			0x31 => self.op_lwcn(),
@@ -150,7 +150,7 @@ impl R3000 {
 	}
 
 	#[allow(dead_code)]
-	pub fn dissasemble(&self, instr: Instruction, bus: &mut Bus) -> String {
+	pub fn dissasemble(&self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) -> String {
 
 		match instr.opcode() {
 
@@ -218,7 +218,7 @@ impl R3000 {
 			0x20 => "lb".to_string(),
 			0x21 => "lh".to_string(),
 			0x22 => "lwl".to_string(),
-			0x23 => format!("lw ${}, 0x{:X}(${}) [0x{:X}](0x{:X})", instr.reg_tgt(), instr.imm16_se(), instr.reg_src(), self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se()), bus.read32(self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se()))),
+			0x23 => format!("lw ${}, 0x{:X}(${}) [0x{:X}](0x{:X})", instr.reg_tgt(), instr.imm16_se(), instr.reg_src(), self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se()), bus.read32(self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se()), scheduler)),
 			0x24 => "lbu".to_string(),
 			0x25 => "lhu".to_string(),
 			0x26 => "lwr".to_string(),
@@ -250,7 +250,7 @@ impl R3000 {
 		self.registers.write_gpr(tgt, imm << 16);
 	}
 
-	fn op_sw(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_sw(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		if self.cop0.read_reg(12) & 0x10000 != 0 {
 			//println!("ignoring store while cache is isolated");
@@ -262,13 +262,13 @@ impl R3000 {
 		let addr = offset.wrapping_add(instr.imm16_se());
 
 		if addr % 4 == 0 {
-			bus.write32(addr, self.registers.read_gpr(instr.reg_tgt()));
+			bus.write32(addr, self.registers.read_gpr(instr.reg_tgt()), scheduler);
 		} else {
 			self.exception(Exception::AddrStoreError);
 		}
 	}
 
-	fn op_lw(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_lw(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		if self.cop0.read_reg(12) & 0x10000 != 0 {
 			//println!("ignoring load while cache is isolated");
@@ -279,13 +279,13 @@ impl R3000 {
 		let addr = offset.wrapping_add(instr.imm16_se());
 
 		if addr % 4 == 0 {
-			self.registers.write_gpr_delayed(instr.reg_tgt(), bus.read32(addr));
+			self.registers.write_gpr_delayed(instr.reg_tgt(), bus.read32(addr, scheduler));
 		} else {
 			self.exception(Exception::AddrLoadError)
 		}
 	}
 
-	fn op_sh(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_sh(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		if self.cop0.read_reg(12) & 0x10000 != 0 {
 			//println!("ignoring store while cache is isolated");
@@ -296,34 +296,34 @@ impl R3000 {
 		let addr = offset.wrapping_add(instr.imm16_se());
 
 		if addr % 2 == 0 {
-			bus.write16(addr, self.registers.read_gpr(instr.reg_tgt()) as u16);
+			bus.write16(addr, self.registers.read_gpr(instr.reg_tgt()) as u16, scheduler);
 		} else {
 			self.exception(Exception::AddrStoreError);
 		}
 	}
 
-	fn op_lh(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_lh(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
 
 		if addr % 2 == 0 {
-			let new_val = bus.read16(addr) as i16;
+			let new_val = bus.read16(addr, scheduler) as i16;
 			self.registers.write_gpr_delayed(instr.reg_tgt(), new_val as u32);
 		} else {
 			self.exception(Exception::AddrLoadError);
 		}
 	}
 
-	fn op_lhu(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_lhu(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
 
 		if addr % 2 == 0 {
-			self.registers.write_gpr_delayed(instr.reg_tgt(), bus.read16(addr) as u32);
+			self.registers.write_gpr_delayed(instr.reg_tgt(), bus.read16(addr, scheduler) as u32);
 		} else {
 			self.exception(Exception::AddrLoadError);
 		}
 	}
 
-	fn op_sb(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_sb(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		if self.cop0.read_reg(12) & 0x10000 != 0 {
 			//println!("ignoring store while cache is isolated");
@@ -333,37 +333,37 @@ impl R3000 {
 		let offset = self.registers.read_gpr(instr.reg_src());
 		let addr = offset.wrapping_add(instr.imm16_se());
 
-		bus.write8(addr, self.registers.read_gpr(instr.reg_tgt()) as u8);
+		bus.write8(addr, self.registers.read_gpr(instr.reg_tgt()) as u8, scheduler);
 	}
 
-	fn op_lb(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_lb(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		let offset = self.registers.read_gpr(instr.reg_src());
 		let addr = offset.wrapping_add(instr.imm16_se());
 
-		let value = bus.read8(addr) as i8; // cast to i8 to sign extend
+		let value = bus.read8(addr, scheduler) as i8; // cast to i8 to sign extend
 
 		self.registers.write_gpr_delayed(instr.reg_tgt(), value as u32);
 	}
 
-	fn op_lbu(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_lbu(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		let offset = self.registers.read_gpr(instr.reg_src());
 		let addr = offset.wrapping_add(instr.imm16_se());
 
-		let value = bus.read8(addr);
+		let value = bus.read8(addr, scheduler);
 
 		self.registers.write_gpr_delayed(instr.reg_tgt(), value as u32);
 	}
 
-	fn op_lwl(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_lwl(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
 
 		let current_val = self.registers.read_gpr_lwl_lwr(instr.reg_tgt());
 
 		let aligned_addr = addr & !0x3;
-		let aligned_word = bus.read32(aligned_addr);
+		let aligned_word = bus.read32(aligned_addr, scheduler);
 
 		let value = match addr & 0x3 {
 			0 => (current_val & 0x00FFFFFF) | (aligned_word << 24),
@@ -376,14 +376,14 @@ impl R3000 {
 		self.registers.write_gpr_delayed(instr.reg_tgt(), value);
 	}
 
-	fn op_lwr(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_lwr(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
 
 		let current_val = self.registers.read_gpr_lwl_lwr(instr.reg_tgt());
 
 		let aligned_addr = addr & !0x3;
-		let aligned_word = bus.read32(aligned_addr);
+		let aligned_word = bus.read32(aligned_addr, scheduler);
 
 		let value = match addr & 0x3 {
 			0 => (current_val & 0x00000000) | (aligned_word >> 0),
@@ -396,14 +396,14 @@ impl R3000 {
 		self.registers.write_gpr_delayed(instr.reg_tgt(), value);
 	}
 
-	fn op_swl(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_swl(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
 
 		let reg_val = self.registers.read_gpr(instr.reg_tgt());
 
 		let aligned_addr = addr & !0x3;
-		let current_mem = bus.read32(aligned_addr);
+		let current_mem = bus.read32(aligned_addr, scheduler);
 
 		let value = match addr & 0x3 {
 			0 => (current_mem & 0xFFFFFF00) | (reg_val >> 24),
@@ -413,17 +413,17 @@ impl R3000 {
 			_ => unreachable!()
 		};
 
-		bus.write32(aligned_addr, value);
+		bus.write32(aligned_addr, value, scheduler);
 	}
 
-	fn op_swr(&mut self, instr: Instruction, bus: &mut Bus) {
+	fn op_swr(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
 
 		let addr = self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se());
 
 		let reg_val = self.registers.read_gpr(instr.reg_tgt());
 
 		let aligned_addr = addr & !0x3;
-		let current_mem = bus.read32(aligned_addr);
+		let current_mem = bus.read32(aligned_addr, scheduler);
 
 		let value = match addr & 0x3 {
 			0 => (current_mem & 0x00000000) | (reg_val << 0),
@@ -433,7 +433,7 @@ impl R3000 {
 			_ => unreachable!()
 		};
 
-		bus.write32(aligned_addr, value);
+		bus.write32(aligned_addr, value, scheduler);
 	}
 
 	fn op_mfhi(&mut self, instr: Instruction) {

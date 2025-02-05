@@ -6,6 +6,7 @@ mod cpu;
 mod gpu;
 mod dma;
 mod interrupts;
+mod timers;
 mod scheduler;
 pub mod bus;
 
@@ -40,7 +41,7 @@ impl PSXEmulator {
 			self.vblank_counter = 0;
 		}
 
-		self.cpu.run_instruction(&mut self.bus);
+		self.cpu.run_instruction(&mut self.bus, &mut self.scheduler);
 		
 		self.vblank_counter += 1;
 	}
@@ -52,7 +53,7 @@ impl PSXEmulator {
 
 			for i in 0..next_event.cycles_away {
 				//if i % 2 != 0 {
-					self.cpu.run_instruction(&mut self.bus);
+					self.cpu.run_instruction(&mut self.bus, &mut self.scheduler);
 				//}
 			}
 

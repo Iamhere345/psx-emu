@@ -1,8 +1,11 @@
+#![allow(unused_variables)]
 use log::*;
 
 use crate::gpu::Gpu;
 use crate::dma::DmaController;
 use crate::interrupts::Interrupts;
+use crate::scheduler::Scheduler;
+use crate::timers::Timers;
 
 const BIOS_START: usize = 0x1FC00000;
 const BIOS_END: usize = BIOS_START + (512 * 1024);
@@ -59,6 +62,7 @@ pub struct Bus {
 	pub gpu: Gpu,
 	pub dma: DmaController,
 	pub interrupts: Interrupts,
+	pub timers: Timers,
 }
 
 fn mask_addr(addr: u32) -> u32 {
@@ -74,11 +78,12 @@ impl Bus {
 
 			gpu: Gpu::new(),
 			dma: DmaController::new(),
-			interrupts: Interrupts::new()
+			interrupts: Interrupts::new(),
+			timers: Timers::new(),
 		}
 	}
 
-	pub fn read8(&self, unmasked_addr: u32) -> u8 {
+	pub fn read8(&self, unmasked_addr: u32, scheduler: &mut Scheduler) -> u8 {
 		
 		let addr = mask_addr(unmasked_addr);
 
@@ -91,7 +96,7 @@ impl Bus {
 			EXPANSION2_START	..= EXPANSION2_END => {info!("read to expansion 2 register 0x{:X}", unmasked_addr); 0},
 
 			SPU_START			..= SPU_END => {info!("read to SPU register 0x{:X}", unmasked_addr); 0},
-			TIMERS_START		..= TIMERS_END => 0,
+			TIMERS_START		..= TIMERS_END =>{ error!("[0x{addr:X}] timer read8"); self.timers.read32(addr, scheduler) as u8},
 			GPU_START			..= GPU_END => 0,
 			PAD_START 			..= PAD_END => 0,
 
@@ -100,31 +105,31 @@ impl Bus {
 
 	}
 
-	pub fn read16(&self, unmasked_addr: u32) -> u16 {
+	pub fn read16(&self, unmasked_addr: u32, scheduler: &mut Scheduler) -> u16 {
 
 		let addr = mask_addr(unmasked_addr);
 
 		match addr as usize {
 			RAM_START	..= RAM_END => u16::from_le_bytes([
-				self.read8(unmasked_addr),
-				self.read8(unmasked_addr + 1)
+				self.read8(unmasked_addr, scheduler),
+				self.read8(unmasked_addr + 1, scheduler)
 			]),
 			SCRATCHPAD_START	..= SCRATCHPAD_END => u16::from_le_bytes([
-				self.read8(unmasked_addr),
-				self.read8(unmasked_addr + 1)
+				self.read8(unmasked_addr, scheduler),
+				self.read8(unmasked_addr + 1, scheduler)
 			]),
 			
 			IRQ_START	..= IRQ_END => self.interrupts.read32(addr) as u16,
 			SPU_START	..= SPU_END => 0,
 			PAD_START	..= PAD_END => 0,
-			TIMERS_START..= TIMERS_END => 0,
+			TIMERS_START..= TIMERS_END => self.timers.read32(addr, scheduler) as u16,
 
 			_ => panic!("unhandled read16 0x{:X}", addr),
 		}
 
 	}
 
-	pub fn read32(&mut self, unmasked_addr: u32) -> u32 {
+	pub fn read32(&mut self, unmasked_addr: u32, scheduler: &mut Scheduler) -> u32 {
 
 		if unmasked_addr % 4 != 0 {
 			panic!("unaligned 32 bit read at addr 0x{:X}", unmasked_addr);
@@ -137,17 +142,18 @@ impl Bus {
 			DMA_START			..= DMA_END => self.dma.read32(addr),
 			MEMCONTROL_START	..= MEMCONTROL_END => 0,
 			IRQ_START			..= IRQ_END => self.interrupts.read32(addr),
+			TIMERS_START		..= TIMERS_END => self.timers.read32(addr, scheduler),
 			_ => u32::from_le_bytes([
-				self.read8(addr),
-				self.read8(addr + 1),
-				self.read8(addr + 2),
-				self.read8(addr + 3),
+				self.read8(addr, scheduler),
+				self.read8(addr + 1, scheduler),
+				self.read8(addr + 2, scheduler),
+				self.read8(addr + 3, scheduler),
 			]),
 		}
 		
 	}
 
-	pub fn write8(&mut self, unmasked_addr: u32, write: u8) {
+	pub fn write8(&mut self, unmasked_addr: u32, write: u8, scheduler: &mut Scheduler) {
 
 		let addr = mask_addr(unmasked_addr);
 
@@ -156,13 +162,13 @@ impl Bus {
 			SCRATCHPAD_START	..= SCRATCHPAD_END => self.scratchpad[addr as usize -  SCRATCHPAD_START] = write,
 
 			SPU_START			..= SPU_END => info!("write to SPU register [0x{addr:X}] 0x{write:X}. Ignoring."),
-			TIMERS_START		..= TIMERS_END => info!("Unhandled write to timers [0x{addr:X} 0x{write:X}. Ignoring"),
+			TIMERS_START		..= TIMERS_END => { error!("write8 to timers [0x{addr:X} 0x{write:X}"); self.timers.write32(addr, write as u32, scheduler); },
 			EXPANSION2_START	..= EXPANSION2_END => info!("write to expansion 2 register [0x{addr:X}] 0x{write:X}. Ignoring."),
 			_ => panic!("unhandled write8 [0x{:X}] 0x{:X}", addr, write)
 		}
 	}
 
-	pub fn write16(&mut self, unmasked_addr: u32, write: u16) {
+	pub fn write16(&mut self, unmasked_addr: u32, write: u16, scheduler: &mut Scheduler) {
 
 		if unmasked_addr % 2 != 0 {
 			panic!("unaligned 16 bit write [0x{unmasked_addr:X}] 0x{write:X}");
@@ -174,17 +180,17 @@ impl Bus {
 
 		match addr as usize {
 			IRQ_START		..= IRQ_END => self.interrupts.write32(addr, write as u32),
-			SPU_START		..=	SPU_END => {}
-			TIMERS_START	..= TIMERS_END => {}
+			SPU_START		..=	SPU_END => {},
+			TIMERS_START	..= TIMERS_END => self.timers.write32(addr, write as u32, scheduler),
 			PAD_START ..= PAD_END => {},
 			
 			RAM_START		..= RAM_END => {
-				self.write8(unmasked_addr, lsb);
-				self.write8(unmasked_addr + 1, msb);
+				self.write8(unmasked_addr, lsb, scheduler);
+				self.write8(unmasked_addr + 1, msb, scheduler);
 			}
 			SCRATCHPAD_START		..= SCRATCHPAD_END => {
-				self.write8(unmasked_addr, lsb);
-				self.write8(unmasked_addr + 1, msb);
+				self.write8(unmasked_addr, lsb, scheduler);
+				self.write8(unmasked_addr + 1, msb, scheduler);
 			},
 
 			_ => panic!("[0x{unmasked_addr:X}] write16 0x{write:X}"),
@@ -192,7 +198,7 @@ impl Bus {
 
 	}
 
-	pub fn write32(&mut self, unmasked_addr: u32, write: u32) {
+	pub fn write32(&mut self, unmasked_addr: u32, write: u32, scheduler: &mut Scheduler) {
 
 		if unmasked_addr % 4 != 0 {
 			panic!("unaligned 32 bit write [0x{unmasked_addr:X}] 0x{write:X}");
@@ -202,16 +208,16 @@ impl Bus {
 
 		match addr as usize {
 			RAM_START			..= RAM_END => {
-				self.write8(addr + 0, (write >> 0) as u8);
-				self.write8(addr + 1, (write >> 8) as u8);
-				self.write8(addr + 2, (write >> 16) as u8);
-				self.write8(addr + 3, (write >> 24) as u8);
+				self.write8(addr + 0, (write >> 0) as u8, scheduler);
+				self.write8(addr + 1, (write >> 8) as u8, scheduler);
+				self.write8(addr + 2, (write >> 16) as u8, scheduler);
+				self.write8(addr + 3, (write >> 24) as u8, scheduler);
 			},
 			SCRATCHPAD_START			..= SCRATCHPAD_END => {
-				self.write8(addr + 0, (write >> 0) as u8);
-				self.write8(addr + 1, (write >> 8) as u8);
-				self.write8(addr + 2, (write >> 16) as u8);
-				self.write8(addr + 3, (write >> 24) as u8);
+				self.write8(addr + 0, (write >> 0) as u8, scheduler);
+				self.write8(addr + 1, (write >> 8) as u8, scheduler);
+				self.write8(addr + 2, (write >> 16) as u8, scheduler);
+				self.write8(addr + 3, (write >> 24) as u8, scheduler);
 			},
 
 			MEMCONTROL_START	..=	MEMCONTROL_END => {
@@ -222,7 +228,7 @@ impl Bus {
 				}
 			}
 			IRQ_START			..= IRQ_END => self.interrupts.write32(addr, write),
-			TIMERS_START		..= TIMERS_END => {},
+			TIMERS_START		..= TIMERS_END => self.timers.write32(addr, write, scheduler),
 			// io register RAM_SIZE
 			0x1F801060	..= 0x1F801064 => {},
 			// io register CACHE_CONTROL
@@ -236,7 +242,7 @@ impl Bus {
 
 						if channel.active() {
 							trace!("triggered DMA{}", channel.channel_num);
-							self.do_dma(channel.channel_num);
+							self.do_dma(channel.channel_num, scheduler);
 						}
 					},
 					_ => self.dma.write32(addr, write),

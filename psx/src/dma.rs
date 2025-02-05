@@ -2,7 +2,7 @@
 use std::array;
 use log::*;
 
-use crate::bus::Bus;
+use crate::{bus::Bus, scheduler::Scheduler};
 
 const CHANNEL_MDECIN: usize = 0;
 const CHANNEL_MDECOUT: usize = 1;
@@ -293,7 +293,7 @@ impl DmaController {
 }
 
 impl Bus {
-	pub fn do_dma(&mut self, channel: usize) {
+	pub fn do_dma(&mut self, channel: usize, scheduler: &mut Scheduler) {
 
 		trace!("doing DMA{channel} {:?}", self.dma.channels[channel].sync_mode);
 
@@ -303,17 +303,17 @@ impl Bus {
 		}
 
 		if channel == CHANNEL_OTC {
-			self.do_dma_otc();
+			self.do_dma_otc(scheduler);
 			return;
 		}
 
 		match self.dma.channels[channel].sync_mode {
-			SyncMode::LinkedList => self.do_dma_linked_list(channel),
-			_ => self.do_dma_block(channel),
+			SyncMode::LinkedList => self.do_dma_linked_list(channel, scheduler),
+			_ => self.do_dma_block(channel, scheduler),
 		}
 	}
 	
-	fn do_dma_linked_list(&mut self, channel_num: usize) {
+	fn do_dma_linked_list(&mut self, channel_num: usize, scheduler: &mut Scheduler) {
 		
 		assert_eq!(channel_num, 2);
 		assert_eq!(self.dma.channels[channel_num].transfer_dir, DmaDirection::FromRam);
@@ -326,7 +326,7 @@ impl Bus {
 		
 		loop {
 
-			let header = self.read32(addr);
+			let header = self.read32(addr, scheduler);
 			let words_to_send = header >> 24;
 			let next_addr = header & 0xFFFFFF;
 
@@ -334,7 +334,7 @@ impl Bus {
 
 			for i in 0..words_to_send {
 
-				let data = self.read32( addr.wrapping_add(4 * (i + 1)));
+				let data = self.read32( addr.wrapping_add(4 * (i + 1)), scheduler);
 				self.gpu.gp0_cmd(data);
 
 				//trace!("[0x{i:X}] linked list write 0x{data:X} to GP0");
@@ -355,7 +355,7 @@ impl Bus {
 
 	}
 
-	fn do_dma_otc(&mut self) {
+	fn do_dma_otc(&mut self, scheduler: &mut Scheduler) {
 
 		let mut addr = self.dma.channels[CHANNEL_OTC].base_addr;
 		let mut dma_len = self.dma.channels[CHANNEL_OTC].block_size as u32;
@@ -378,7 +378,7 @@ impl Bus {
 			};
 
 
-			self.write32(addr, next_addr);
+			self.write32(addr, next_addr, scheduler);
 			addr = next_addr;
 
 		}
@@ -388,7 +388,7 @@ impl Bus {
 
 	}
 
-	fn do_dma_block(&mut self, channel_num: usize) {
+	fn do_dma_block(&mut self, channel_num: usize, scheduler: &mut Scheduler) {
 
 		let channel = self.dma.channels[channel_num].clone();
 
@@ -408,7 +408,7 @@ impl Bus {
 
 			match channel.transfer_dir {
 				DmaDirection::FromRam => {
-					let word = self.read32(addr);
+					let word = self.read32(addr, scheduler);
 
 					match channel_num {
 						CHANNEL_GPU => {
