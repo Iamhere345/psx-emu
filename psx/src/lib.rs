@@ -30,7 +30,7 @@ impl PSXEmulator {
 			out_vram: vec![0; 512 * 2048].into_boxed_slice().try_into().unwrap(),
 		};
 
-		psx.scheduler.schedule_event(SchedulerEvent::new(scheduler::EventType::Vblank, 571212));
+		psx.scheduler.schedule_event(SchedulerEvent::new(scheduler::EventType::Vblank), 571212);
 
 		psx
 	}
@@ -51,13 +51,13 @@ impl PSXEmulator {
 		loop {
 			let next_event = self.scheduler.next_event().unwrap();
 
-			for i in 0..next_event.cycles_away {
-				//if i % 2 != 0 {
+			for i in 0..next_event.cycles {
+				if i % 2 != 0 {
 					self.cpu.run_instruction(&mut self.bus, &mut self.scheduler);
-				//}
+				}
 			}
 
-			self.scheduler.tick_events(next_event.cycles_away);
+			self.scheduler.tick_events(next_event.cycles);
 
 			self.scheduler.handle_event(next_event, &mut self.bus);
 

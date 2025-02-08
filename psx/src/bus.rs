@@ -83,7 +83,7 @@ impl Bus {
 		}
 	}
 
-	pub fn read8(&self, unmasked_addr: u32, scheduler: &mut Scheduler) -> u8 {
+	pub fn read8(&mut self, unmasked_addr: u32, scheduler: &mut Scheduler) -> u8 {
 		
 		let addr = mask_addr(unmasked_addr);
 
@@ -105,7 +105,7 @@ impl Bus {
 
 	}
 
-	pub fn read16(&self, unmasked_addr: u32, scheduler: &mut Scheduler) -> u16 {
+	pub fn read16(&mut self, unmasked_addr: u32, scheduler: &mut Scheduler) -> u16 {
 
 		let addr = mask_addr(unmasked_addr);
 

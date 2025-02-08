@@ -152,7 +152,6 @@ impl R3000 {
 
 	fn exception(&mut self, exception: Exception) {
 
-		// TODO: other cause fields
 		self.cop0.reg_cause.exception = exception;
 
 		self.cop0.reg_epc = match self.in_delay_slot {
@@ -179,7 +178,7 @@ impl R3000 {
 		if (pc == 0xA0 && self.registers.read_gpr(9) == 0x3C) || (pc == 0xB0 && self.registers.read_gpr(9) == 0x3D) {
 			let char = self.registers.read_gpr(4) as u8 as char;
 
-			//print!("{char}");
+			print!("{char}");
 
 			self.tty_buf.push(char);
 		}

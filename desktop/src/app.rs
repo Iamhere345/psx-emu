@@ -7,7 +7,6 @@ use psx::PSXEmulator;
 use crate::components::{control::*, vram::*, tty_logger::*};
 
 const BIOS_PATH: &str = "res/SCPH1001.bin";
-const CYCLES_PER_SECOND: usize = (33868800.0 / 60.0) as usize;
 
 pub struct Desktop {
 	psx: PSXEmulator,
@@ -26,7 +25,7 @@ impl Desktop {
 
 		#[allow(unused_mut)]
 		let mut psx = PSXEmulator::new(bios);
-		//psx.sideload_exe(fs::read("res/VBLANK.exe").unwrap());
+		psx.sideload_exe(fs::read("res/timers.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/RenderTexturePolygonCLUT4BPP.exe").unwrap());
 
