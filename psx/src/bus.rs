@@ -1,6 +1,7 @@
 #![allow(unused_variables)]
 use log::*;
 
+use crate::cdrom::Cdrom;
 use crate::gpu::Gpu;
 use crate::dma::DmaController;
 use crate::interrupts::Interrupts;
@@ -43,6 +44,9 @@ const EXPANSION2_END: usize = EXPANSION2_START + 0x42;
 const PAD_START: usize = 0x1F801040;
 const PAD_END: usize = 0x1F80104E;
 
+const CDROM_START: usize = 0x1F801800;
+const CDROM_END: usize = 0x1F801803;
+
 const REGION_MASK: [u32; 8] = [
 	// KUSEG 2048Mb
 	0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 
@@ -61,6 +65,7 @@ pub struct Bus {
 
 	pub gpu: Gpu,
 	pub dma: DmaController,
+	pub cdrom: Cdrom,
 	pub interrupts: Interrupts,
 	pub timers: Timers,
 }
@@ -78,6 +83,7 @@ impl Bus {
 
 			gpu: Gpu::new(),
 			dma: DmaController::new(),
+			cdrom: Cdrom::new(),
 			interrupts: Interrupts::new(),
 			timers: Timers::new(),
 		}
@@ -98,7 +104,8 @@ impl Bus {
 			SPU_START			..= SPU_END => {info!("read to SPU register 0x{:X}", unmasked_addr); 0},
 			TIMERS_START		..= TIMERS_END =>{ error!("[0x{addr:X}] timer read8"); self.timers.read32(addr, scheduler) as u8},
 			GPU_START			..= GPU_END => 0,
-			PAD_START 			..= PAD_END => 0,
+			PAD_START 			..= PAD_END => { info!("read8 pad 0x{addr:X}"); 0xFF },
+			CDROM_START			..= CDROM_END => self.cdrom.read8(addr),
 
 			_ => panic!("unhandled read8 0x{:X}", addr)
 		}
@@ -121,7 +128,7 @@ impl Bus {
 			
 			IRQ_START	..= IRQ_END => self.interrupts.read32(addr) as u16,
 			SPU_START	..= SPU_END => 0,
-			PAD_START	..= PAD_END => 0,
+			PAD_START	..= PAD_END => { info!("read16 pad 0x{addr:X}"); 0xFFFF },
 			TIMERS_START..= TIMERS_END => self.timers.read32(addr, scheduler) as u16,
 
 			_ => panic!("unhandled read16 0x{:X}", addr),
@@ -131,11 +138,14 @@ impl Bus {
 
 	pub fn read32(&mut self, unmasked_addr: u32, scheduler: &mut Scheduler) -> u32 {
 
+		
 		if unmasked_addr % 4 != 0 {
 			panic!("unaligned 32 bit read at addr 0x{:X}", unmasked_addr);
 		}
-
+		
 		let addr = mask_addr(unmasked_addr);
+		
+		
 
 		match addr as usize {
 			GPU_START			..= GPU_END => self.gpu.read32(addr),
@@ -164,6 +174,9 @@ impl Bus {
 			SPU_START			..= SPU_END => info!("write to SPU register [0x{addr:X}] 0x{write:X}. Ignoring."),
 			TIMERS_START		..= TIMERS_END => { error!("write8 to timers [0x{addr:X} 0x{write:X}"); self.timers.write32(addr, write as u32, scheduler); },
 			EXPANSION2_START	..= EXPANSION2_END => info!("write to expansion 2 register [0x{addr:X}] 0x{write:X}. Ignoring."),
+			CDROM_START			..= CDROM_END => self.cdrom.write8(addr, write, &mut self.interrupts),
+			PAD_START			..= PAD_END => { info!("write8 to SIO register [0x{addr:X}] 0x{write:X}. Ignoring.") },
+			
 			_ => panic!("unhandled write8 [0x{:X}] 0x{:X}", addr, write)
 		}
 	}
@@ -182,7 +195,7 @@ impl Bus {
 			IRQ_START		..= IRQ_END => self.interrupts.write32(addr, write as u32),
 			SPU_START		..=	SPU_END => {},
 			TIMERS_START	..= TIMERS_END => self.timers.write32(addr, write as u32, scheduler),
-			PAD_START ..= PAD_END => {},
+			PAD_START ..= PAD_END => { info!("[0x{addr:X}] Unhandled pad write 0x{write:X}") },
 			
 			RAM_START		..= RAM_END => {
 				self.write8(unmasked_addr, lsb, scheduler);

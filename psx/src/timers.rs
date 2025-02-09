@@ -2,7 +2,7 @@ use log::*;
 
 use crate::{interrupts::*, scheduler::*};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum ResetMode {
 	AfterOverflow = 0,
 	AfterTarget = 1,
@@ -70,6 +70,9 @@ impl Timers {
 	}
 
 	pub fn overflow_event(&mut self, timer_num: u8, scheduler: &mut Scheduler, interrupts: &mut Interrupts) {
+
+		trace!("Timer{timer_num} overflow");
+
 		let timer = &mut self.timers[timer_num as usize];
 
 		if timer.irq_at_overflow && timer.irq {
@@ -110,11 +113,13 @@ impl Timers {
 			scheduler.schedule_event(SchedulerEvent::new(EventType::TimerOverflow(timer_num)), overflow_cycles);
 		}
 
-		let cycles = if timer.reset_after == ResetMode::AfterTarget {
-			timer.target
-		} else {
+		let cycles = if timer.counter == timer.target {
 			0xFFFF - timer.counter + timer.target
+		} else {
+			timer.target
 		};
+
+		trace!("Timer{timer_num} target 0x{:X} reset mode: {:?} (0xFFFF - 0x{:X} + 0x{:X})", timer.convert_cycles(cycles), timer.reset_after, timer.counter, timer.target);
 
 		let target_cycles = timer.convert_cycles(cycles);
 		scheduler.schedule_event(SchedulerEvent::new(EventType::TimerTarget(timer_num)), target_cycles);
@@ -271,6 +276,9 @@ impl Timer {
 			ClockSource::System => {
 				return cycles as u64;
 			},
+			ClockSource::SystemDiv => {
+				return (cycles * 8) as u64;
+			}
 			ClockSource::Hblank => {
 				return (f64::from(cycles) * 3.2 * 853.0) as u64;
 			}

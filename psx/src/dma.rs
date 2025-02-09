@@ -420,7 +420,17 @@ impl Bus {
 				},
 
 				DmaDirection::ToRam => {
-					todo!()
+					let word = match channel_num {
+						CHANNEL_GPU => {
+							let read = self.gpu.read32(0x1F801810);
+							trace!("DMA block read 0x{read:X} from GP0");
+
+							read
+						},
+						_ => todo!("ToRam DMA{channel_num} mode {:?}", channel.sync_mode),
+					};
+					
+					self.write32(addr, word, scheduler);
 				}
 			}
 

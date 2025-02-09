@@ -5,6 +5,7 @@ use scheduler::{EventType, Scheduler, SchedulerEvent};
 mod cpu;
 mod gpu;
 mod dma;
+mod cdrom;
 mod interrupts;
 mod timers;
 mod scheduler;

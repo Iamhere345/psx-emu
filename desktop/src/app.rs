@@ -25,9 +25,9 @@ impl Desktop {
 
 		#[allow(unused_mut)]
 		let mut psx = PSXEmulator::new(bios);
-		psx.sideload_exe(fs::read("res/timers.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/HITPSX.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/RenderTexturePolygonCLUT4BPP.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/MemoryTransfer24BPP.exe").unwrap());
 
 		Self {
 			psx: psx,

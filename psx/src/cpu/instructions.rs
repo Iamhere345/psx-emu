@@ -1,3 +1,5 @@
+use log::*;
+
 use crate::{bus::Bus, scheduler::Scheduler};
 
 use super::{Exception, R3000};
@@ -788,7 +790,7 @@ impl R3000 {
 	}
 
 	fn op_gte(&mut self, instr: Instruction) {
-		panic!("Unhandled GTE instruction: 0x{:X}", instr.raw);
+		error!("Unhandled GTE instruction: 0x{:X}", instr.raw);
 	}
 
 	fn op_lwcn(&mut self) {

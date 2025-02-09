@@ -2,12 +2,21 @@
 use std::cmp;
 use log::*;
 
+/* const DITHERING_TABLE: [[i8; 4]; 4] = [
+	[-4,  0,  -3,  1],
+	[2,  -2,  3,  -1],
+	[-3,  1,  -4,  0],
+	[3,  -1,  2,  -2],
+]; */
+
+const DITHERING_TABLE: &[[i8; 4]; 4] = &[[-4, 0, -3, 1], [2, -2, 3, -1], [-3, 1, -4, 0], [3, -1, 2, -2]];
+
 #[derive(Debug, Clone, Copy)]
 enum DrawCommand {
 	CpuVramDma,
 	VramCpuDma,
 	VramVramDma,
-	DrawRect(u32),
+	DrawRect(RectCmdParams),
 	DrawPolygon(PolygonCmdParams),
 	QuickFill(u32)
 }
@@ -27,6 +36,26 @@ impl TexBitDepth {
 			1 => TexBitDepth::EightBit,
 			2 | 3 => TexBitDepth::FiveteenBit,
 			_ => unreachable!("value: {bits}")
+		}
+	}
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum RectSize {
+	Variable,
+	Pixel,
+	Sprite8x8,
+	Sprite16x16,
+}
+
+impl RectSize {
+	fn from_bits(bits: u32) -> Self {
+		match bits {
+			0 => Self::Variable,
+			1 => Self::Pixel,
+			2 => Self::Sprite8x8,
+			3 => Self::Sprite16x16,
+			_ => unimplemented!(),
 		}
 	}
 }
@@ -55,6 +84,18 @@ struct PolygonCmdParams {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct RectCmdParams {
+	size_type: RectSize,
+	textured: bool,
+	semi_transparent: bool,
+	raw_texture: bool,
+	colour: Colour,
+	position: Vertex,
+	clut: Vertex,
+	size: Vertex,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct VramDmaInfo {
 	dest_x: u16,
 	dest_y: u16,
@@ -64,14 +105,17 @@ struct VramDmaInfo {
 
 	current_row: u16,
 	current_col: u16,
+
+	halfwords_left: u16
 }
 
-// set by GP0 $E2, some fields are set by textured cmds
+// set by GP0 $E1, some fields are set by textured cmds
 #[derive(Default)]
 struct TexturePage {
 	x_base: u32,
 	y_base: u32,
 	bit_depth: TexBitDepth,
+	dithering: bool,
 	flip_x: bool,
 	flip_y: bool,
 }
@@ -96,11 +140,27 @@ impl Colour {
 		}
 	}
 
+	fn truncate_to_15bit(&self) -> u16 {
+		let r: u16 = (self.r >> 3).into();
+        let g: u16 = (self.g >> 3).into();
+        let b: u16 = (self.b >> 3).into();
+
+        r | (g << 5) | (b << 10)
+	}
+
 	fn from_rgb555(word: u16) -> Self {
 		Self {
 			r: ((word & 0x1F)) as u8,
 			g: (((word >> 5) & 0x1F)) as u8,
 			b: (((word >> 10) & 0x1F)) as u8,
+		}
+	}
+
+	fn from_packet(word: u32) -> Self {
+		Self {
+			r: ((word >> 0) & 0xFF) as u8,
+			g: ((word >> 8) & 0xFF) as u8,
+			b: ((word >> 16) & 0xFF) as u8,
 		}
 	}
 }
@@ -204,13 +264,13 @@ impl Gpu {
 				// 0/7 cmds need to be decoded with the highest 8 bits
 				0 => match word >> 24 {
 					0 | 0x3..=0x1E => {
-						debug!("NOP / unused cmd: 0x{word:X} GP0(${:X})", word >> 29);
+						trace!("NOP / unused cmd: 0x{word:X} GP0(${:X})", word >> 29);
 
 						GP0State::WaitingForNextCmd
 					},
 					0x01 => {
 						// not emulating the texture cache, this does nothing
-						debug!("clear texture cache");
+						trace!("clear texture cache");
 
 						GP0State::WaitingForNextCmd
 					},
@@ -235,11 +295,12 @@ impl Gpu {
 						textured: textured,
 						semi_transparent: (word >> 25) & 1 != 0,
 						raw_texture: (word >> 24) & 1 != 0,
-						colour: Colour::from_rgb888(
+						/* colour: Colour::from_rgb888(
 							((word & 0xFF) >> 3) as u8,
 							(((word >> 8) & 0xFF) >> 3) as u8,
 							(((word >> 16) & 0xFF) >> 3) as u8
-						),
+						), */
+						colour: Colour::from_packet(word),
 						clut: Vertex::default(),
 					};
 
@@ -251,18 +312,38 @@ impl Gpu {
 					GP0State::WaitingForParams { command: DrawCommand::DrawPolygon(params), index: 0, words_left: words_left }
 				},
 				2 => todo!("draw line"),
-				3 => GP0State::WaitingForParams { command: DrawCommand::DrawRect(word), index: 0, words_left: 1 },
+				3 => {
+					let rect_size = RectSize::from_bits((word >> 27) & 3);
+					let textured = (word >> 26) & 1 != 0;
+
+					let words_left = 1 + u8::from(textured) + u8::from(rect_size == RectSize::Variable);
+
+					let params = RectCmdParams {
+						size_type: rect_size,
+						textured: textured,
+						semi_transparent: (word >> 25) & 1 != 0,
+						raw_texture: (word >> 24) & 1 != 0,
+						colour: Colour::from_packet(word),
+						position: Vertex::default(),
+						clut: Vertex::default(),
+						size: Vertex::default(),
+					};
+
+					GP0State::WaitingForParams { command: DrawCommand::DrawRect(params), index: 0, words_left: words_left }
+				}
+				//3 => GP0State::WaitingForParams { command: DrawCommand::DrawRect(word), index: 0, words_left: 1 },
 				4 => GP0State::WaitingForParams { command: DrawCommand::VramVramDma, index: 0, words_left: 3 },
 				5 => GP0State::WaitingForParams { command: DrawCommand::CpuVramDma, index: 0, words_left: 2 },
 				6 => GP0State::WaitingForParams { command: DrawCommand::VramCpuDma, index: 0, words_left: 2 },
 
 				7 => match word >> 24 {
 					0xE1 => { 
-						debug!("set draw mode");
+						trace!("set draw mode");
 
 						self.tex_page.x_base = 64 * (word & 0xF);
 						self.tex_page.y_base = 246 * ((word >> 4) & 1);
 						self.tex_page.bit_depth = TexBitDepth::from_bits((word >> 7) & 3);
+						self.tex_page.dithering = (word >> 9) & 1 != 0;
 						self.tex_page.flip_x = (word >> 12) & 1 != 0;
 						self.tex_page.flip_y = (word >> 13) & 1 != 0;
 
@@ -345,12 +426,13 @@ impl Gpu {
 				GP0State::WaitingForNextCmd
 			}
 			DrawCommand::DrawRect(cmd) => {
-				self.draw_pixel(cmd, self.gp0_params[0]);
+				trace!("draw rect");
+				self.draw_rect(cmd);
 
 				GP0State::WaitingForNextCmd
 			},
 			DrawCommand::DrawPolygon(cmd) => {
-				debug!("draw polygon");
+				trace!("draw polygon");
 				self.draw_polygon(cmd);
 
 				GP0State::WaitingForNextCmd
@@ -378,6 +460,8 @@ impl Gpu {
 			height = 512;
 		}
 
+		let extra_halfword = (width * height) % 2 != 0;
+
 		VramDmaInfo {
 			dest_x,
 			dest_y,
@@ -385,6 +469,7 @@ impl Gpu {
 			height,
 			current_row: 0,
 			current_col: 0,
+			halfwords_left: (width * height) + u16::from(extra_halfword),
 		}
 	}
 
@@ -402,12 +487,13 @@ impl Gpu {
 			self.vram[vram_addr] = halfword;
 
 			info.current_col += 1;
+			info.halfwords_left -= 1;
 
 			if info.current_col == info.width {
 				info.current_col = 0;
 				info.current_row += 1;
 
-				if info.current_row == info.height {
+				if info.halfwords_left == 0 {
 					return GP0State::WaitingForNextCmd;
 				}
 			}
@@ -432,16 +518,16 @@ impl Gpu {
 			result[i] = self.vram[vram_addr];
 
 			info.current_col += 1;
+			info.halfwords_left -= 1;
 
 			if info.current_col == info.width {
 				info.current_col = 0;
 				info.current_row += 1;
-
 			}
 			
 		}
 
-		if info.current_row == info.height {
+		if info.halfwords_left == 0 {
 			self.gp0_state = GP0State::WaitingForNextCmd;
 		} else {
 			self.gp0_state = GP0State::SendData(info);
@@ -478,18 +564,55 @@ impl Gpu {
 		}
 	}
 
-	fn draw_pixel(&mut self, cmd: u32, param: u32) {
-		let r = (cmd & 0xFF) >> 3;
-		let g = ((cmd >> 8) & 0xFF) >> 3;
-		let b = ((cmd >> 16) & 0xFF) >> 3;
+	fn draw_rect(&mut self, mut cmd: RectCmdParams) {
+		cmd.position = Vertex::from_packet(self.gp0_params[0]);
 
-		let pixel = (r | (g << 5) | (b << 10)) as u16;
+		let (clut_packet, size_packet) = match (cmd.textured, cmd.size_type == RectSize::Variable) {
+			(true, true) => (self.gp0_params[1], self.gp0_params[2]),
+			(true, false) => (self.gp0_params[1], 0),
+			(false, true) => (0, self.gp0_params[1]),
+			(false, false) => (0, 0),
+		};
 
-		let x = param & 0x3FF;
-		let y = (param >> 16) & 0x1FF;
+		cmd.clut = Vertex::new((((clut_packet >> 16) & 0x3F) as u16 as i32) * 16, ((clut_packet >> 22) & 0x1FF) as u16 as i32);
+		cmd.position.tex_x = (clut_packet & 0xFF) as i32;
+		cmd.position.tex_y = ((clut_packet >> 8) & 0xFF) as i32;
 
-		let vram_addr = coord_to_vram_index(x, y) as usize;
-		self.vram[vram_addr] = pixel;
+		cmd.size = match cmd.size_type {
+			RectSize::Variable => Vertex::from_packet(size_packet),
+			RectSize::Pixel => Vertex::new(1, 1),
+			RectSize::Sprite8x8 => Vertex::new(8, 8),
+			RectSize::Sprite16x16 => Vertex::new(16, 16),
+		};
+		
+		let mut min_x = cmd.position.x;
+		let mut max_x = cmd.position.x + cmd.size.x;
+		let mut min_y = cmd.position.y;
+		let mut max_y = cmd.position.y + cmd.size.y;
+
+		// constrain rect to drawing area
+		min_x = cmp::max(min_x, self.draw_area_top_left.x);
+		max_x = cmp::min(max_x, self.draw_area_bottom_right.x);
+		min_y = cmp::max(min_y, self.draw_area_top_left.y);
+		max_y = cmp::min(max_y, self.draw_area_bottom_right.y);
+
+		if min_x > max_x || min_y > max_y {
+			return;
+		}
+
+		for y in min_y..=max_y {
+			for x in min_x..=max_x {
+
+				let draw_colour = if cmd.textured {
+					self.sample_texture(Vertex::new(cmd.position.tex_x + (x - min_x), cmd.position.tex_y + (y - min_y)), cmd.clut)
+				} else {
+					u16::from(cmd.colour.r) | (u16::from(cmd.colour.g) << 5) | (u16::from(cmd.colour.b) << 10)
+				};
+
+				self.vram[coord_to_vram_index(x as u32, y as u32) as usize] = draw_colour;
+
+			}
+		}
 	}
 
 	fn quick_fill(&mut self, cmd: u32) {
@@ -547,12 +670,12 @@ impl Gpu {
 		v[0].tex_y = ((self.gp0_params[1 + 0 * texcoord_offset] >> 8) & 0xFF) as i32;
 
 		v[1] = Vertex::from_packet(self.gp0_params[1 * vertex_offset]);
-		v[1].colour = Colour::rgb888_to_rgb555(self.gp0_params[1 + 0 * colour_offset]);
+		v[1].colour = Colour::from_packet(self.gp0_params[1 + 0 * colour_offset]);
 		v[1].tex_x = (self.gp0_params[1 + 1 * texcoord_offset] & 0xFF) as i32;
 		v[1].tex_y = ((self.gp0_params[1 + 1 * texcoord_offset] >> 8) & 0xFF) as i32;
 
 		v[2] = Vertex::from_packet(self.gp0_params[2 * vertex_offset]);
-		v[2].colour = Colour::rgb888_to_rgb555(self.gp0_params[1 + 1 * colour_offset]);
+		v[2].colour = Colour::from_packet(self.gp0_params[1 + 1 * colour_offset]);
 		v[2].tex_x = (self.gp0_params[1 + 2 * texcoord_offset] & 0xFF) as i32;
 		v[2].tex_y = ((self.gp0_params[1 + 2 * texcoord_offset] >> 8) & 0xFF) as i32;
 
@@ -561,7 +684,7 @@ impl Gpu {
 
 		if cmd.vertices == 4 {
 			v[3] = Vertex::from_packet(self.gp0_params[3 * vertex_offset]);
-			v[3].colour = Colour::rgb888_to_rgb555(self.gp0_params[1 + 2 * colour_offset]);
+			v[3].colour = Colour::from_packet(self.gp0_params[1 + 2 * colour_offset]);
 			v[3].tex_x = (self.gp0_params[1 + 3 * texcoord_offset] & 0xFF) as i32;
 			v[3].tex_y = ((self.gp0_params[1 + 3 * texcoord_offset] >> 8) & 0xFF) as i32;
 
@@ -593,17 +716,25 @@ impl Gpu {
 		for y in min_y..=max_y {
 			for x in min_x..=max_x {
 
-				if is_inside_triangle(Vertex::new(x, y), v0, v1, v2) {
+				let p = Vertex::new(x, y);
+
+				if is_inside_triangle(p, v0, v1, v2) {
 					let shaded_colour = if cmd.shaded {
-						let coords = compute_barycentric_coords(Vertex::new(x, y), v0, v1, v2);
-						interpolate_colour(coords, [v0.colour, v1.colour, v2.colour])
+						let coords = compute_barycentric_coords(p, v0, v1, v2);
+						let mut colour = interpolate_colour(coords, [v0.colour, v1.colour, v2.colour]);
+
+						if self.tex_page.dithering {
+							colour = apply_dithering(colour, p);
+						}
+
+						colour
 					} else {
 						cmd.colour
 					};
 
 					let textured_colour = if cmd.textured {
 						
-						let coords = compute_barycentric_coords(Vertex::new(x, y), v0, v1, v2);
+						let coords = compute_barycentric_coords(p, v0, v1, v2);
 						let interpolated_coords = interpolate_uv(coords, [v0, v1, v2]);
 
 						let colour = self.sample_texture(interpolated_coords, cmd.clut);
@@ -613,14 +744,13 @@ impl Gpu {
 							continue;
 						}
 
-						Colour::from_rgb555(colour)
+						colour
 
 					} else {
-						shaded_colour
+						shaded_colour.truncate_to_15bit()
 					};
-					
-					let draw_colour = u16::from(textured_colour.r) | (u16::from(textured_colour.g) << 5) | (u16::from(textured_colour.b) << 10);
-					self.vram[coord_to_vram_index(x as u32, y as u32) as usize] = draw_colour;
+
+					self.vram[coord_to_vram_index(x as u32, y as u32) as usize] = textured_colour;
 				}
 			}
 		}
@@ -746,4 +876,14 @@ fn interpolate_uv(lambda: [f64; 3], tex_coords: [Vertex; 3]) -> Vertex {
 	let v = (lambda[0] * coords_y[0] + lambda[1] * coords_y[1] + lambda[2] * coords_y[2]) as i32;
 
 	Vertex::new(u, v)
+}
+
+fn apply_dithering(colour: Colour, p: Vertex) -> Colour {
+    let offset = DITHERING_TABLE[(p.y & 3) as usize][(p.x & 3) as usize];
+
+    Colour {
+        r: colour.r.saturating_add_signed(offset),
+        g: colour.g.saturating_add_signed(offset),
+        b: colour.b.saturating_add_signed(offset),
+    }
 }

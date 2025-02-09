@@ -84,6 +84,8 @@ pub struct R3000 {
 	exception: bool,
 
 	pub tty_buf: String,
+
+	debug: bool,
 }
 
 impl R3000 {
@@ -99,6 +101,8 @@ impl R3000 {
 			exception: false,
 
 			tty_buf: String::new(),
+
+			debug: false,
 		}
 	}
 
@@ -138,8 +142,10 @@ impl R3000 {
 		}
 
 		print!("\n"); */
-		//log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus, scheduler), self.registers);
-		
+		if self.debug {
+			log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus, scheduler), self.registers);
+		}
+
 		self.registers.process_delayed_loads();
 
 		if !self.exception {
