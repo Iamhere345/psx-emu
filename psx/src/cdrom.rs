@@ -123,7 +123,7 @@ impl Cdrom {
 				// status hardcoded to shell open
 				self.result_fifo.push_back(0x10);
 
-				self.int_regs.raise_interrupt(5);
+				self.int_regs.raise_interrupt(3);
 				irq.raise_interrupt(crate::interrupts::InterruptFlag::Cdrom);
 			}
 			0x19 => if let Some(sub_cmd) = self.params_fifo.pop_front() {

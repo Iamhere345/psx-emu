@@ -202,8 +202,11 @@ pub struct Gpu {
 
 	reg_gpuread: u32,
 
+	// misc draw settings
 	draw_area_top_left: Vertex,
 	draw_area_bottom_right: Vertex,
+	force_mask_bit: bool,
+	check_mask_bit: bool,
 
 	tex_page: TexturePage,
 }
@@ -223,6 +226,8 @@ impl Gpu {
 
 			draw_area_top_left: Vertex::new(0, 0),
 			draw_area_bottom_right: Vertex::new(0, 0),
+			force_mask_bit: false,
+			check_mask_bit: false,
 
 			tex_page: TexturePage::default(),
 		}
@@ -372,6 +377,13 @@ impl Gpu {
 						GP0State::WaitingForNextCmd
 					},
 					0xE5 => { debug!("set drawing offset"); GP0State::WaitingForNextCmd },
+					// mask bit settings
+					0xE6 => {
+						self.force_mask_bit = word & 1 != 0;
+						self.check_mask_bit = (word >> 1) & 1 != 0;
+
+						GP0State::WaitingForNextCmd
+					}
 					_ => { debug!("Enviroment cmd 0x{word:X} GP0(${:X})", word >> 24); GP0State::WaitingForNextCmd }
 				}
 
@@ -483,8 +495,7 @@ impl Gpu {
 			// wrap from 1023 to 0
 			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
-			let vram_addr = coord_to_vram_index(vram_col, vram_row) as usize;
-			self.vram[vram_addr] = halfword;
+			self.draw_pixel_15bit(halfword, vram_col, vram_row);
 
 			info.current_col += 1;
 			info.halfwords_left -= 1;
@@ -492,12 +503,11 @@ impl Gpu {
 			if info.current_col == info.width {
 				info.current_col = 0;
 				info.current_row += 1;
-
-				if info.halfwords_left == 0 {
-					return GP0State::WaitingForNextCmd;
-				}
 			}
+		}
 
+		if info.halfwords_left == 0 {
+			return GP0State::WaitingForNextCmd;
 		}
 
 		GP0State::RecvData(info)
@@ -556,10 +566,9 @@ impl Gpu {
 		for y_offset in 0..height {
 			for x_offset in 0..width {
 				let src_addr = coord_to_vram_index((src_x + x_offset) as u32, (src_y + y_offset) as u32) as usize;
-				let dest_addr = coord_to_vram_index((dest_x + x_offset) as u32, (dest_y + y_offset) as u32) as  usize;
 
 				let src = self.vram[src_addr];
-				self.vram[dest_addr] = src;
+				self.draw_pixel_15bit(src, (dest_x + x_offset) as u32, (dest_y + y_offset) as u32);
 			}
 		}
 	}
@@ -609,8 +618,7 @@ impl Gpu {
 					u16::from(cmd.colour.r) | (u16::from(cmd.colour.g) << 5) | (u16::from(cmd.colour.b) << 10)
 				};
 
-				self.vram[coord_to_vram_index(x as u32, y as u32) as usize] = draw_colour;
-
+				self.draw_pixel_15bit(draw_colour, x as u32, y as u32);
 			}
 		}
 	}
@@ -635,6 +643,7 @@ impl Gpu {
 			for x_offset in 0..width {
 				let index = coord_to_vram_index((x + x_offset) & 0x3FF, (y + y_offset) & 0x1FF);
 
+				// quick fill doesn't check mask bit
 				self.vram[index as usize] = colour;
 			}
 		}
@@ -750,7 +759,7 @@ impl Gpu {
 						shaded_colour.truncate_to_15bit()
 					};
 
-					self.vram[coord_to_vram_index(x as u32, y as u32) as usize] = textured_colour;
+					self.draw_pixel_15bit(textured_colour, x as u32, y as u32);
 				}
 			}
 		}
@@ -786,6 +795,18 @@ impl Gpu {
 			},
 		}
 
+	}
+
+	fn draw_pixel_15bit(&mut self, colour: u16, x: u32, y: u32) {
+		let mask = u16::from(self.force_mask_bit) << 15;
+
+		let old_pixel = self.vram[coord_to_vram_index(x, y) as usize];
+
+		if self.check_mask_bit && old_pixel & 0x8000 != 0 {
+			return;
+		}
+
+		self.vram[coord_to_vram_index(x, y) as usize] = colour | mask;
 	}
 	
 }
