@@ -300,11 +300,6 @@ impl Gpu {
 						textured: textured,
 						semi_transparent: (word >> 25) & 1 != 0,
 						raw_texture: (word >> 24) & 1 != 0,
-						/* colour: Colour::from_rgb888(
-							((word & 0xFF) >> 3) as u8,
-							(((word >> 8) & 0xFF) >> 3) as u8,
-							(((word >> 16) & 0xFF) >> 3) as u8
-						), */
 						colour: Colour::from_packet(word),
 						clut: Vertex::default(),
 					};
@@ -346,7 +341,7 @@ impl Gpu {
 						trace!("set draw mode");
 
 						self.tex_page.x_base = 64 * (word & 0xF);
-						self.tex_page.y_base = 246 * ((word >> 4) & 1);
+						self.tex_page.y_base = 256 * ((word >> 4) & 1);
 						self.tex_page.bit_depth = TexBitDepth::from_bits((word >> 7) & 3);
 						self.tex_page.dithering = (word >> 9) & 1 != 0;
 						self.tex_page.flip_x = (word >> 12) & 1 != 0;
@@ -354,6 +349,11 @@ impl Gpu {
 
 						GP0State::WaitingForNextCmd
 				 	},
+					0xE2 => {
+						//trace!("Texture window:\nMaskX: {} MaskY: {}\nOffsetX: {} OffsetY: {}", word & 0xF, (word >> 5) & 0x1F, (word >> 10) & 0x1F, (word >> 15) & 0x1F);
+
+						GP0State::WaitingForNextCmd
+					},
 					//set drawing area top left
 					0xE3 => {
 						self.draw_area_top_left = Vertex::new(
@@ -543,7 +543,7 @@ impl Gpu {
 			self.gp0_state = GP0State::SendData(info);
 		}
 
-		(u32::from(result[0]) << 16) | u32::from(result[1])
+		(u32::from(result[1]) << 16) | u32::from(result[0])
 	}
 
 	fn vram_copy(&mut self) {
@@ -595,9 +595,9 @@ impl Gpu {
 		};
 		
 		let mut min_x = cmd.position.x;
-		let mut max_x = cmd.position.x + cmd.size.x;
+		let mut max_x = cmd.position.x + cmd.size.x - 1;
 		let mut min_y = cmd.position.y;
-		let mut max_y = cmd.position.y + cmd.size.y;
+		let mut max_y = cmd.position.y + cmd.size.y - 1;
 
 		// constrain rect to drawing area
 		min_x = cmp::max(min_x, self.draw_area_top_left.x);
@@ -637,7 +637,7 @@ impl Gpu {
 		let width = (((self.gp0_params[1] & 0xFFFF) & 0x3FF) + 0x0F) & !(0x0F);
 		let height = (self.gp0_params[1] >> 16) & 0x1FF;
 
-		//println!("quick fill at ({x}, {y}) of size ({width}, {height}) cmd: ${cmd:X} r:{r} g:{g} b{b} colour: ${colour:X}");
+		//debug!("quick fill at ({x}, {y}) of size ({width}, {height}) cmd: ${cmd:X} r:{r} g:{g} b{b} colour: ${colour:X}");
 
 		for y_offset in 0..height {
 			for x_offset in 0..width {

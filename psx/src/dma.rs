@@ -44,8 +44,8 @@ pub struct Channel {
 
 	base_addr: u32,
 	
-	block_size: u16,
-	block_amount: u16,
+	block_size: u32,
+	block_amount: u32,
 
 	transfer_dir: DmaDirection,
 	step_dir: StepDirection,
@@ -99,8 +99,16 @@ impl Channel {
 		match (addr >> 0x2) & 0x3 {
 			0 => self.base_addr = write,
 			1 => {
-				self.block_size = write as u16;
-				self.block_amount = (write >> 16) as u16;
+				self.block_size = write & 0xFFFF;
+				self.block_amount = (write >> 16) & 0xFFFF;
+
+				if self.block_size == 0 {
+					self.block_size = 0x10000;
+				}
+
+				if self.block_amount == 0 {
+					self.block_amount = 0x10000;
+				}
 			},
 			// channel control register
 			2 => {				

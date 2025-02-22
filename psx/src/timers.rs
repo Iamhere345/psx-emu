@@ -177,8 +177,6 @@ impl Timer {
 	}
 
 	pub fn read_counter(&self, scheduler: &mut Scheduler) -> u32 {
-		
-		//0xFFFF - (((cycles_remaining.0 as f32) / (self.overflow_cpu_cycles as f32)) * 0xFFFF as f32) as u16
 		let overflow_ev = scheduler.get_event(EventType::TimerOverflow(self.timer_num));
 
 		if let Some(event) = overflow_ev {
