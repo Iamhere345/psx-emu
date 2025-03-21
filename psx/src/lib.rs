@@ -8,6 +8,7 @@ mod dma;
 mod cdrom;
 mod interrupts;
 mod timers;
+mod sio0;
 mod scheduler;
 pub mod bus;
 
@@ -50,25 +51,65 @@ impl PSXEmulator {
 	pub fn run_frame(&mut self) {
 		
 		loop {
-			let next_event = self.scheduler.next_event().unwrap();
+			while !self.scheduler.next_event_ready() {
+				self.cpu.run_instruction(&mut self.bus, &mut self.scheduler);
 
-			for i in 0..next_event.cycles {
-				if i % 2 != 0 {
-					self.cpu.run_instruction(&mut self.bus, &mut self.scheduler);
-				}
+				self.scheduler.tick_scheduler(2);
 			}
 
-			self.scheduler.tick_events(next_event.cycles);
+			let last_event = self.scheduler.pop_event();
 
-			self.scheduler.handle_event(next_event, &mut self.bus);
+			self.scheduler.handle_event(last_event, &mut self.bus);
 
-			if next_event.event_type == EventType::Vblank {
+			if last_event.event_type == EventType::Vblank {
 				break;
 			}
 
 		}
 
 		self.out_vram = self.bus.gpu.vram.clone();
+	}
+
+	pub fn update_input(
+		&mut self,
+
+		up: bool,
+		down: bool,
+		left: bool,
+		right: bool,
+
+		cross: bool,
+		square: bool,
+		triangle: bool,
+		circle: bool,
+
+		l1: bool,
+		l2: bool,
+		r1: bool,
+		r2: bool,
+
+		start: bool,
+		select: bool,
+	) {
+		let ctx = &mut self.bus.sio0.controller_state;
+
+		ctx.btn_up = up;
+		ctx.btn_down = down;
+		ctx.btn_left = left;
+		ctx.btn_right = right;
+
+		ctx.btn_cross = cross;
+		ctx.btn_square = square;
+		ctx.btn_triangle = triangle;
+		ctx.btn_circle = circle;
+
+		ctx.btn_l1 = l1;
+		ctx.btn_l2 = l2;
+		ctx.btn_r1 = r1;
+		ctx.btn_r2 = r2;
+
+		ctx.btn_start = start;
+		ctx.btn_select = select;
 	}
 
 	// from https://jsgroth.dev/blog/posts/ps1-sideloading/
