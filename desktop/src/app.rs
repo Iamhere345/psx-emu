@@ -40,7 +40,7 @@ impl Desktop {
 
 		#[allow(unused_mut)]
 		let mut psx = PSXEmulator::new(bios);
-		psx.sideload_exe(fs::read("res/hello-tests/hello_pad.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/hello-tests/hello_pad.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/tests/pad.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/RenderTextureRectangle15BPP.exe").unwrap());

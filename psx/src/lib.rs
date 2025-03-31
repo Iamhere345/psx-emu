@@ -17,7 +17,6 @@ pub struct PSXEmulator {
 	bus: Bus,
 	scheduler: Scheduler,
 
-	vblank_counter: u64,
 	out_vram: Box<[u16]>,
 }
 
@@ -28,7 +27,6 @@ impl PSXEmulator {
 			bus: Bus::new(bios),
 			scheduler: Scheduler::new(),
 
-			vblank_counter: 0,
 			out_vram: vec![0; 512 * 2048].into_boxed_slice().try_into().unwrap(),
 		};
 
@@ -38,14 +36,16 @@ impl PSXEmulator {
 	}
 
 	pub fn tick(&mut self) {
-		if self.vblank_counter == 564_480 {
-			self.out_vram = self.bus.gpu.vram.clone();
-			self.vblank_counter = 0;
+		if self.scheduler.next_event_ready() {
+			let event = self.scheduler.pop_event();
+			self.scheduler.handle_event(event, &mut self.bus);
+
+			if event.event_type == EventType::Vblank {
+				self.out_vram = self.bus.gpu.vram.clone();
+			}
 		}
 
 		self.cpu.run_instruction(&mut self.bus, &mut self.scheduler);
-		
-		self.vblank_counter += 1;
 	}
 
 	pub fn run_frame(&mut self) {
