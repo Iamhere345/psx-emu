@@ -790,7 +790,7 @@ impl R3000 {
 	}
 
 	fn op_gte(&mut self, instr: Instruction) {
-		error!("Unhandled GTE instruction: 0x{:X}", instr.raw);
+		//error!("Unhandled GTE instruction: 0x{:X}", instr.raw);
 	}
 
 	fn op_lwcn(&mut self) {
@@ -798,7 +798,7 @@ impl R3000 {
 	}
 
 	fn op_lwc_gte(&mut self, instr: Instruction) {
-		panic!("Unhandled GTE LWC: 0x{:X}", instr.raw);
+		//error!("Unhandled GTE LWC: 0x{:X}", instr.raw);
 	}
 
 	fn op_swcn(&mut self) {
@@ -806,7 +806,7 @@ impl R3000 {
 	}
 
 	fn op_swc_gte(&mut self, instr: Instruction) {
-		panic!("Unhandled GTE SWC: 0x{:X}", instr.raw);
+		//error!("Unhandled GTE SWC: 0x{:X}", instr.raw);
 	}
 
 }

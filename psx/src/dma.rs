@@ -2,7 +2,7 @@
 use std::array;
 use log::*;
 
-use crate::{bus::Bus, scheduler::Scheduler};
+use crate::{bus::Bus, interrupts::Interrupts, scheduler::{Scheduler, SchedulerEvent}};
 
 const CHANNEL_MDECIN: usize = 0;
 const CHANNEL_MDECOUT: usize = 1;
@@ -11,6 +11,9 @@ const CHANNEL_CDROM: usize = 3;
 const CHANNEL_SPU: usize = 4;
 const CHANNEL_PIO: usize = 5;
 const CHANNEL_OTC: usize = 6;
+
+const CDROM_CLKS: u64 = 40;
+const AVG_CLKS: u64 = 1;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub enum SyncMode {
@@ -250,6 +253,38 @@ impl DmaInterruptRegister {
 		self.master_enable = (write >> 23) & 0x1 != 0;
 		self.channel_int &= !((write >> 24) & 0x7F) as u8;
 
+		self.set_master_int();
+
+	}
+
+	pub fn raise_int(&mut self, flag: u8, interrupts: &mut Interrupts) {
+		// interrupts are set ONLY if they are also set in the mask
+		if self.channel_mask & (1 << flag) != 0 {
+			trace!("DMA{flag} int");
+			self.channel_int |= 1 << flag;
+		}
+		
+		trace!("DMA{flag} no int. mask: 0b{:b} & 0b{:b}", self.channel_mask, 1 << flag);
+
+		let old_master_int = self.master_flag;
+		self.set_master_int();
+
+		if self.master_flag && !old_master_int {
+			trace!("DMA{flag} raise int");
+			interrupts.raise_interrupt(crate::interrupts::InterruptFlag::Dma);
+		}
+	}
+
+	pub fn set_master_int(&mut self) {
+		if self.bus_error || (self.master_enable && (self.channel_mask & self.channel_int) != 0) {
+			self.master_flag = true;
+		} else {
+			self.master_flag = false;
+		}
+	}
+
+	pub fn int_cond(&self, flag: u8) -> bool {
+		(self.int_cond & (1 << flag)) != 0
 	}
 }
 
@@ -271,6 +306,8 @@ impl DmaController {
 	pub fn read32(&self, addr: u32) -> u32 {
 		let channel = (addr >> 0x4) & 0x7;
 
+		//trace!("[0x{addr:X}] DMA{channel} read32");
+
 		match addr {
 			// channel registers
 			0x1F801080	..= 0x1F8010EF => self.channels[channel as usize].read32(addr),
@@ -286,6 +323,8 @@ impl DmaController {
 	pub fn write32(&mut self, addr: u32, write: u32) {
 		let channel = (addr >> 0x4) & 0x7;
 
+		//trace!("[0x{addr:X}] DMA{channel} write32 0x{write:X}");
+
 		match addr {
 			// channel registers
 			0x1F801080	..= 0x1F8010EF => self.channels[channel as usize].write32(addr, write),
@@ -298,6 +337,10 @@ impl DmaController {
 		}
 	}
 
+	pub fn raise_int(&mut self, flag: u8, interrupts: &mut Interrupts) {
+		self.irq.raise_int(flag, interrupts);
+	}
+
 }
 
 impl Bus {
@@ -306,7 +349,7 @@ impl Bus {
 		trace!("doing DMA{channel} {:?}", self.dma.channels[channel].sync_mode);
 
 		if !self.dma.control.channel_enable[channel] {
-			info!("triggered DMA{channel} when disabled in control reg");
+			warn!("triggered DMA{channel} when disabled in control reg");
 			return;
 		}
 
@@ -315,13 +358,21 @@ impl Bus {
 			return;
 		}
 
-		match self.dma.channels[channel].sync_mode {
+		let words = match self.dma.channels[channel].sync_mode {
 			SyncMode::LinkedList => self.do_dma_linked_list(channel, scheduler),
 			_ => self.do_dma_block(channel, scheduler),
-		}
+		};
+
+		let dma_clks = match channel {
+			CHANNEL_CDROM => CDROM_CLKS,
+			_ => AVG_CLKS
+		};
+
+		scheduler.schedule_event(SchedulerEvent::new(crate::scheduler::EventType::DmaIrq(channel as u8)), words * dma_clks);
+
 	}
 	
-	fn do_dma_linked_list(&mut self, channel_num: usize, scheduler: &mut Scheduler) {
+	fn do_dma_linked_list(&mut self, channel_num: usize, scheduler: &mut Scheduler) -> u64 {
 		
 		assert_eq!(channel_num, 2);
 		assert_eq!(self.dma.channels[channel_num].transfer_dir, DmaDirection::FromRam);
@@ -331,7 +382,8 @@ impl Bus {
 		let channel = self.dma.channels[channel_num].clone();
 
 		let mut addr = channel.base_addr;
-		
+		let mut words_sent = 0;
+
 		loop {
 
 			let header = self.read32(addr, scheduler);
@@ -346,6 +398,7 @@ impl Bus {
 				self.gpu.gp0_cmd(data);
 
 				//trace!("[0x{i:X}] linked list write 0x{data:X} to GP0");
+				words_sent += 1;
 			}
 
 			addr = next_addr;
@@ -361,9 +414,11 @@ impl Bus {
 		self.dma.channels[channel_num].transfer_active = false;
 		self.dma.channels[channel_num].manual_trigger = false;
 
+		words_sent
+
 	}
 
-	fn do_dma_otc(&mut self, scheduler: &mut Scheduler) {
+	fn do_dma_otc(&mut self, scheduler: &mut Scheduler) -> u64 {
 
 		let mut addr = self.dma.channels[CHANNEL_OTC].base_addr;
 		let mut dma_len = self.dma.channels[CHANNEL_OTC].block_size as u32;
@@ -394,9 +449,11 @@ impl Bus {
 		self.dma.channels[CHANNEL_OTC].transfer_active = false;
 		self.dma.channels[CHANNEL_OTC].manual_trigger = false;
 
+		dma_len as u64
+
 	}
 
-	fn do_dma_block(&mut self, channel_num: usize, scheduler: &mut Scheduler) {
+	fn do_dma_block(&mut self, channel_num: usize, scheduler: &mut Scheduler) -> u64 {
 
 		let channel = self.dma.channels[channel_num].clone();
 
@@ -412,6 +469,8 @@ impl Bus {
 			SyncMode::LinkedList => unimplemented!()
 		};
 
+		trace!("doing DMA{channel_num} start: 0x{addr:X} words: 0x{words_left:X}");
+
 		for _ in 0..words_left {
 
 			match channel.transfer_dir {
@@ -420,9 +479,12 @@ impl Bus {
 
 					match channel_num {
 						CHANNEL_GPU => {
-							trace!("dma block write 0x{word:X} to GP0");
+							//trace!("dma block write 0x{word:X} to GP0");
 							self.gpu.gp0_cmd(word);
 						},
+						CHANNEL_SPU => {
+							// stubbed
+						}
 						_ => todo!("FromRam DMA{channel_num}")
 					}
 				},
@@ -431,10 +493,20 @@ impl Bus {
 					let word = match channel_num {
 						CHANNEL_GPU => {
 							let read = self.gpu.read32(0x1F801810);
-							trace!("DMA block read 0x{read:X} from GP0");
+							//trace!("DMA block read 0x{read:X} from GP0");
 
 							read
 						},
+						CHANNEL_CDROM => {
+							let mut data = [0; 4];
+
+							for byte in &mut data {
+								*byte = self.cdrom.read8(0x1F801802);
+								//trace!("DMA read 0x{byte:X} from CDROM");
+							}
+
+							u32::from_le_bytes(data)
+						}
 						_ => todo!("ToRam DMA{channel_num} mode {:?}", channel.sync_mode),
 					};
 					
@@ -446,9 +518,12 @@ impl Bus {
 
 		}
 
+		trace!("DMA{channel_num} finished");
+
 		self.dma.channels[channel_num].transfer_active = false;
 		self.dma.channels[channel_num].manual_trigger = false;
 
+		words_left as u64
 
 	}
 

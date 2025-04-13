@@ -82,7 +82,7 @@ impl StatusRegister {
 		self.prev_usr_mode = self.cur_usr_mode;
 
 		self.cur_int_enable = false;
-		self.cur_usr_mode = true;
+		self.cur_usr_mode = false;
 	}
 
 	// used by RFE

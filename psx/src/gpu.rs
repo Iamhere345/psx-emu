@@ -361,7 +361,7 @@ impl Gpu {
 							((word >> 10) & 0x1FF) as i32
 						);
 
-						debug!("draw area top left: {:?}", self.draw_area_top_left);
+						trace!("draw area top left: {:?}", self.draw_area_top_left);
 
 						GP0State::WaitingForNextCmd
 					},
@@ -372,11 +372,11 @@ impl Gpu {
 							((word >> 10) & 0x1FF) as i32
 						);
 
-						debug!("draw area bottom right: {:?} word: 0x{word:X}", self.draw_area_bottom_right);
+						trace!("draw area bottom right: {:?} word: 0x{word:X}", self.draw_area_bottom_right);
 
 						GP0State::WaitingForNextCmd
 					},
-					0xE5 => { debug!("set drawing offset"); GP0State::WaitingForNextCmd },
+					0xE5 => { trace!("set drawing offset"); GP0State::WaitingForNextCmd },
 					// mask bit settings
 					0xE6 => {
 						self.force_mask_bit = word & 1 != 0;

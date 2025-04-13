@@ -104,6 +104,7 @@ pub struct Sio0 {
     
     // stubbed
     sio_mode: u16,
+    baudrate: u16,
     
     irq: bool,
     ack: bool,    // acknowledge / "get more data request"
@@ -129,6 +130,7 @@ impl Sio0 {
             port_select: false,
             
             sio_mode: 0,
+            baudrate: 0,
             
             irq: false,
             ack: false,
@@ -141,7 +143,7 @@ impl Sio0 {
             0x1F801044 => self.read_stat(),
             0x1F801048 => self.read_mode().into(),
             0x1F80104A => self.read_ctrl().into(),
-            0x1F80104E => { info!("Unhandled read to SIO0_BAUD"); 0 },
+            0x1F80104E => self.baudrate.into(),
             _ => unreachable!()
         }
     }
@@ -152,7 +154,7 @@ impl Sio0 {
             0x1F801044 => {},
             0x1F801048 => self.write_mode(write as u16),
             0x1F80104A => self.write_ctrl(write as u16),
-            0x1F80104E => info!("Unhandled write to SIO0_BAUD"),
+            0x1F80104E => self.baudrate = write as u16,
             _ => unreachable!()
         }
     }
@@ -301,7 +303,7 @@ impl Sio0 {
     }
 
     pub fn irq_event(&mut self, interrupts: &mut Interrupts) {
-        debug!("IRQ7");
+        trace!("IRQ7");
 
         self.ack = false;
         self.irq = true;

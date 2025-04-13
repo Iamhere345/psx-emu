@@ -1,11 +1,12 @@
 use cpu::R3000;
 use bus::Bus;
 use scheduler::{EventType, Scheduler, SchedulerEvent};
+use cdrom::disc::Disc;
 
 mod cpu;
 mod gpu;
 mod dma;
-mod cdrom;
+pub mod cdrom;
 mod interrupts;
 mod timers;
 mod sio0;
@@ -13,7 +14,7 @@ mod scheduler;
 pub mod bus;
 
 pub struct PSXEmulator {
-	cpu: R3000,
+	pub cpu: R3000,
 	bus: Bus,
 	scheduler: Scheduler,
 
@@ -38,7 +39,7 @@ impl PSXEmulator {
 	pub fn tick(&mut self) {
 		if self.scheduler.next_event_ready() {
 			let event = self.scheduler.pop_event();
-			self.scheduler.handle_event(event, &mut self.bus);
+			self.scheduler.handle_event(event.clone(), &mut self.bus);
 
 			if event.event_type == EventType::Vblank {
 				self.out_vram = self.bus.gpu.vram.clone();
@@ -59,7 +60,7 @@ impl PSXEmulator {
 
 			let last_event = self.scheduler.pop_event();
 
-			self.scheduler.handle_event(last_event, &mut self.bus);
+			self.scheduler.handle_event(last_event.clone(), &mut self.bus);
 
 			if last_event.event_type == EventType::Vblank {
 				break;
@@ -68,6 +69,10 @@ impl PSXEmulator {
 		}
 
 		self.out_vram = self.bus.gpu.vram.clone();
+	}
+
+	pub fn load_disc(&mut self, disc: Disc) {
+		self.bus.cdrom.load_disc(disc);
 	}
 
 	pub fn update_input(
@@ -117,7 +122,6 @@ impl PSXEmulator {
 
 		// Wait for the BIOS to jump to the shell
 		while self.cpu.pc != 0x80030000 {
-			// Tick must be instruction-by-instruction to avoid possibly missing the $80030000 jump
 			self.tick();
 		}
 

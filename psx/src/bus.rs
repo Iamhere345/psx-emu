@@ -21,6 +21,9 @@ const SCRATCHPAD_END: usize = 0x1F8003FF;
 const MEMCONTROL_START: usize = 0x1F801000;
 const MEMCONTROL_END: usize = 0x1F801000 + 36;
 
+const RAM_SIZE_START: usize = 0x1F801060;
+const RAM_SIZE_END: usize = 0x1F801064;
+
 const IRQ_START: usize = 0x1F801070;
 const IRQ_END: usize = 0x1F801074;
 
@@ -80,7 +83,7 @@ impl Bus {
 	pub fn new(bios: Vec<u8>) -> Self {
 		Self {
 			bios: bios,
-			ram: vec![0xDA; 2048 * 1024],
+			ram: vec![0xFA; 2048 * 1024],
 			scratchpad: vec![0xBA; 1024],
 
 			gpu: Gpu::new(),
@@ -103,6 +106,8 @@ impl Bus {
 
 			EXPANSION1_START	..= EXPANSION1_END => {info!("read to expansion 1 register 0x{:X}", unmasked_addr); 0xFF},
 			EXPANSION2_START	..= EXPANSION2_END => {info!("read to expansion 2 register 0x{:X}", unmasked_addr); 0},
+			MEMCONTROL_START	..= MEMCONTROL_END => 0,
+			RAM_SIZE_START		..= RAM_SIZE_END => 0,
 
 			SPU_START			..= SPU_END => {info!("read to SPU register 0x{:X}", unmasked_addr); 0},
 			TIMERS_START		..= TIMERS_END =>{ error!("[0x{addr:X}] timer read8"); self.timers.read32(addr, scheduler) as u8},
@@ -175,7 +180,7 @@ impl Bus {
 			SPU_START			..= SPU_END => info!("write to SPU register [0x{addr:X}] 0x{write:X}. Ignoring."),
 			TIMERS_START		..= TIMERS_END => { error!("write8 to timers [0x{addr:X} 0x{write:X}"); self.timers.write32(addr, write as u32, scheduler); },
 			EXPANSION2_START	..= EXPANSION2_END => info!("write to expansion 2 register [0x{addr:X}] 0x{write:X}. Ignoring."),
-			CDROM_START			..= CDROM_END => self.cdrom.write8(addr, write, &mut self.interrupts),
+			CDROM_START			..= CDROM_END => self.cdrom.write8(addr, write, scheduler),
 			PAD_START			..= PAD_END => self.sio0.write32(addr, write.into(), scheduler),
 			
 			_ => panic!("unhandled write8 [0x{:X}] 0x{:X}", addr, write)

@@ -1,17 +1,19 @@
 use std::collections::BinaryHeap;
 
-use crate::{bus::Bus, interrupts::InterruptFlag};
+use crate::{bus::Bus, interrupts::InterruptFlag, cdrom::CmdResponse};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum EventType {
 	Vblank,
 	TimerTarget(u8),
 	TimerOverflow(u8),
 	Sio0Irq,
 	Sio0Rx(u8, bool),
+	CdromCmd(CmdResponse),
+	DmaIrq(u8),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct SchedulerEvent {
 	pub event_type: EventType,
 	pub cpu_timestamp: u64,
@@ -123,6 +125,12 @@ impl Scheduler {
 			},
 			EventType::Sio0Rx(value, interrupt) => {
 				bus.sio0.rx_event(self, value, interrupt);
+			}
+			EventType::CdromCmd(response) => {
+				bus.cdrom.handle_cmd_response(response, self, &mut bus.interrupts);
+			},
+			EventType::DmaIrq(channel) => {
+				bus.dma.raise_int(channel, &mut bus.interrupts);
 			}
 		}
 	}

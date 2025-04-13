@@ -1,8 +1,14 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
+use std::path::PathBuf;
 
 use eframe::egui::{self, Key};
 use eframe::{App, CreationContext};
+
+use rcue::parser::parse_from_file;
+
 use psx::PSXEmulator;
+use psx::cdrom::disc::Disc;
 
 use crate::components::{control::*, vram::*, tty_logger::*};
 
@@ -40,10 +46,22 @@ impl Desktop {
 
 		#[allow(unused_mut)]
 		let mut psx = PSXEmulator::new(bios);
+		//load_disc(r"E:\Roms\PS1\Ridge Racer (USA)\Ridge Racer (USA).cue", &mut psx);
+		//load_disc(r"E:\Roms\PS1\Puzzle Bobble\Puzzle Bobble 2 (Japan).cue", &mut psx);
+		
+		//load_disc("res/hello-tests/hello_cd.cue", &mut psx);
+		//psx.sideload_exe(fs::read("res/hello-tests/hello_cd.exe").unwrap());
+
+		//load_disc(r"E:\Roms\PS1\Crash Bandicoot\Crash Bandicoot (Europe, Australia).cue", &mut psx);
+		//load_disc(r"E:\Roms\PS1\Mega Man X4 (USA)\Mega Man X4 (USA).cue", &mut psx);
+		load_disc(r"E:\Roms\PS1\Mortal Kombat II (Japan)\Mortal Kombat II (Japan).cue", &mut psx);
+
 		//psx.sideload_exe(fs::read("res/hello-tests/hello_pad.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/tests/pad.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/pong.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/RenderTextureRectangle15BPP.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/psxtest_cpx.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/tests/getloc.exe").unwrap());
 
 		Self {
 			psx: psx,
@@ -80,8 +98,8 @@ impl Desktop {
 		let select = self.is_keyboard_input_down(BTN_SELECT, ctx);
 		
 		self.psx.update_input(up, down, left, right, cross, square, triangle, circle, l1, l2, r1, r2, start, select);
-
 	}
+
 }
 
 impl App for Desktop {
@@ -117,4 +135,31 @@ impl App for Desktop {
 
 		ctx.request_repaint();
 	}
+}
+
+fn load_disc(cue_path: &str, psx: &mut PSXEmulator) {
+	let cue = parse_from_file(cue_path, false).unwrap();
+
+	let mut cue_dir = PathBuf::from(cue_path);
+	cue_dir.pop();
+
+	let mut tracks: Vec<Vec<u8>> = Vec::new();
+
+	for track in cue.files {
+		// assuming each file.bin has 1 track
+		//println!("track file: {}", track.file);
+		let mut track_path = cue_dir.clone();
+		track_path.push(track.file);
+
+		let mut track_file = File::open(track_path).unwrap();
+
+		let mut data = Vec::new();
+		track_file.read_to_end(&mut data).expect("Unable to read track data");
+
+		tracks.push(data);
+	}
+
+	let disc = Disc::new(tracks);
+
+	psx.load_disc(disc);
 }

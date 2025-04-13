@@ -1,5 +1,6 @@
 use log::*;
 
+#[derive(Debug)]
 pub enum InterruptFlag {
 	Vblank 		= 1 << 0,
 	Gpu 		= 1 << 1,
@@ -29,22 +30,22 @@ impl Interrupts {
 	pub fn read32(&self, addr: u32) -> u32 {
 		
 		let read = match addr {
-			0x1F801070 => self.reg_status,
-			0x1F801074 => self.reg_mask,
+			0x1F801070 => { trace!("IRQ read status: 0b{:b}", self.reg_status); self.reg_status },
+			0x1F801074 => { trace!("IRQ read mask: 0b{:b}", self.reg_mask); self.reg_mask },
 			_ => unreachable!("{addr:X}")
 		};
 		
-		trace!("IRQ read [0x{addr:X}] 0x{read:X}");
+		//trace!("IRQ read [0x{addr:X}] 0x{read:X}");
 
 		read
 	}
 
 	pub fn write32(&mut self, addr: u32, write: u32) {
-		trace!("IRQ write [0x{addr:X}] 0x{write:X}");
+		//trace!("IRQ write [0x{addr:X}] 0x{write:X}");
 
 		match addr {
-			0x1F801070 => self.ack_interrupt(write),
-			0x1F801074 => self.reg_mask = write,
+			0x1F801070 => { trace!("IRQ ack int 0b{write:b}"); self.ack_interrupt(write) },
+			0x1F801074 => { trace!("IRQ write mask 0b{write:b}"); self.reg_mask = write },
 			_ => unreachable!()
 		}
 	}
@@ -54,6 +55,7 @@ impl Interrupts {
 	}
 
 	pub fn raise_interrupt(&mut self, int: InterruptFlag) {
+		//trace!("raise int {int:?}. mask: 0b{:b}", self.reg_mask);
 		self.reg_status |= int as u32;
 	}
 

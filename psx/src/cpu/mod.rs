@@ -85,7 +85,7 @@ pub struct R3000 {
 
 	pub tty_buf: String,
 
-	debug: bool,
+	pub debug: bool,
 }
 
 impl R3000 {
@@ -128,7 +128,7 @@ impl R3000 {
 
 		self.cop0.reg_cause.set_hw_interrupt(bus.interrupts.triggered());
 		if self.cop0.interrupt_pending() && self.cop0.reg_sr.cur_int_enable {
-			log::trace!("interrupt");
+			log::trace!("interrupt (status: 0b{:b})", bus.interrupts.read32(0x1F801070));
 			// TODO GTE instructions need to be run before the interrupt is serviced
 			self.exception(Exception::Interrupt);
 		} else {
@@ -165,6 +165,7 @@ impl R3000 {
 			false => {self.cop0.reg_cause.branch_delay = false; self.pc}
 		};
 
+		// TODO BadVAddr
 
 		self.cop0.reg_sr.push_exception();
 
