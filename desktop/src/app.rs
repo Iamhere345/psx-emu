@@ -10,7 +10,7 @@ use rcue::parser::parse_from_file;
 use psx::PSXEmulator;
 use psx::cdrom::disc::Disc;
 
-use crate::components::{control::*, vram::*, tty_logger::*};
+use crate::components::{control::*, vram::*, tty_logger::*, disassembly::*};
 
 const BIOS_PATH: &str = "res/SCPH1001.bin";
 
@@ -35,6 +35,7 @@ pub struct Desktop {
 	control: Control,
 	vram: VramViewer,
 	tty_logger: TTYLogger,
+	disassembly: Disassembly,
 
 	control_open: bool,
 }
@@ -54,14 +55,18 @@ impl Desktop {
 
 		//load_disc(r"E:\Roms\PS1\Crash Bandicoot\Crash Bandicoot (Europe, Australia).cue", &mut psx);
 		//load_disc(r"E:\Roms\PS1\Mega Man X4 (USA)\Mega Man X4 (USA).cue", &mut psx);
-		load_disc(r"E:\Roms\PS1\Mortal Kombat II (Japan)\Mortal Kombat II (Japan).cue", &mut psx);
+		//load_disc(r"E:\Roms\PS1\Gran Turismo 2 Arcade NTSCJAP\GRANTURISMO2.CUE", &mut psx);
+		//load_disc(r"E:\Roms\PS1\Mortal Kombat II (Japan)\Mortal Kombat II (Japan).cue", &mut psx);
+		load_disc(r"C:\Users\lunar\Downloads\SONICPSX\GAME.cue", &mut psx);
+		//load_disc(r"E:\Roms\PS1\Castlevania - Symphony of the Night (USA)\Castlevania - Symphony of the Night (USA).cue", &mut psx);
+		//load_disc(r"E:\Roms\PS1\Metal Gear Solid\Metal Gear Solid (Europe) (Disc 1).cue", &mut psx);
 
 		//psx.sideload_exe(fs::read("res/hello-tests/hello_pad.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/pong.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/RenderTextureRectangle15BPP.exe").unwrap());
 		//psx.sideload_exe(fs::read("res/psxtest_cpx.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/tests/getloc.exe").unwrap());
+		//psx.sideload_exe(fs::read("res/tests/benchmark.exe").unwrap());
 
 		Self {
 			psx: psx,
@@ -69,6 +74,7 @@ impl Desktop {
 			control: Control::new(),
 			vram: VramViewer::new(cc),
 			tty_logger: TTYLogger::new(),
+			disassembly: Disassembly::new(),
 
 			control_open: true,
 		}
@@ -114,10 +120,19 @@ impl App for Desktop {
 			
 			self.psx.run_frame();
 		}
+
+		if self.control.step {
+			self.psx.tick();
+			self.control.step = false;
+		}
 		
 		if self.control_open {
-			egui::Window::new("Control").show(ctx, |ui| {
+			egui::Window::new("CPU").show(ctx, |ui| {
 				self.control.show(ui);
+
+				ui.separator();
+
+				self.disassembly.show(ui, &mut self.psx);
 			});
 		}
 
@@ -146,8 +161,6 @@ fn load_disc(cue_path: &str, psx: &mut PSXEmulator) {
 	let mut tracks: Vec<Vec<u8>> = Vec::new();
 
 	for track in cue.files {
-		// assuming each file.bin has 1 track
-		//println!("track file: {}", track.file);
 		let mut track_path = cue_dir.clone();
 		track_path.push(track.file);
 

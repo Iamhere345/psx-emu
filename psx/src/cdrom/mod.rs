@@ -183,14 +183,14 @@ impl Cdrom {
 			// result
 			1 => { 
 				let result = self.result_fifo.pop_front().or(Some(0)).unwrap();
-				debug!("read result fifo: 0x{result:X}");
+				//trace!("read result fifo: 0x{result:X}");
 
 				result 
 			},
 			// RDDATA
 			2 => {
 				let data = self.data_fifio.pop_front().or(Some(0)).unwrap();
-				debug!("read data fifo: 0x{data:X}");
+				//trace!("read data fifo: 0x{data:X}");
 
 				data
 			},

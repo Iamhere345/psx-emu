@@ -4,7 +4,7 @@ use crate::{bus::Bus, scheduler::Scheduler};
 use cop0::*;
 use instructions::Instruction;
 
-mod instructions;
+pub mod instructions;
 mod cop0;
 
 #[derive(Debug)]
@@ -128,7 +128,7 @@ impl R3000 {
 
 		self.cop0.reg_cause.set_hw_interrupt(bus.interrupts.triggered());
 		if self.cop0.interrupt_pending() && self.cop0.reg_sr.cur_int_enable {
-			log::trace!("interrupt (status: 0b{:b})", bus.interrupts.read32(0x1F801070));
+			//log::trace!("interrupt (status: 0b{:b})", bus.interrupts.read32(0x1F801070));
 			// TODO GTE instructions need to be run before the interrupt is serviced
 			self.exception(Exception::Interrupt);
 		} else {
@@ -143,7 +143,7 @@ impl R3000 {
 
 		print!("\n"); */
 		if self.debug {
-			log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus, scheduler), self.registers);
+			//log::trace!("[0x{:X}] {} (0x{instruction:X}) registers: {:X?}", self.pc, self.dissasemble(Instruction::from_u32(instruction), bus, scheduler), self.registers);
 		}
 
 		self.registers.process_delayed_loads();

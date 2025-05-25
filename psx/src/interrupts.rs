@@ -1,6 +1,6 @@
 use log::*;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum InterruptFlag {
 	Vblank 		= 1 << 0,
 	Gpu 		= 1 << 1,
@@ -30,7 +30,7 @@ impl Interrupts {
 	pub fn read32(&self, addr: u32) -> u32 {
 		
 		let read = match addr {
-			0x1F801070 => { trace!("IRQ read status: 0b{:b}", self.reg_status); self.reg_status },
+			0x1F801070 => { trace!("IRQ read status: 0b{:b} (mask: 0b{:b})", self.reg_status, self.reg_mask); self.reg_status },
 			0x1F801074 => { trace!("IRQ read mask: 0b{:b}", self.reg_mask); self.reg_mask },
 			_ => unreachable!("{addr:X}")
 		};
@@ -56,6 +56,7 @@ impl Interrupts {
 
 	pub fn raise_interrupt(&mut self, int: InterruptFlag) {
 		//trace!("raise int {int:?}. mask: 0b{:b}", self.reg_mask);
+
 		self.reg_status |= int as u32;
 	}
 

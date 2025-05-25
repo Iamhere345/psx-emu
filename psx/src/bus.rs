@@ -13,7 +13,7 @@ const BIOS_START: usize = 0x1FC00000;
 const BIOS_END: usize = BIOS_START + (512 * 1024);
 
 const RAM_START: usize = 0x0;
-const RAM_END: usize = RAM_START + (2048 * 1024);
+const RAM_END: usize = RAM_START + (2048 * 1024) - 1;
 
 const SCRATCHPAD_START: usize = 0x1F800000;
 const SCRATCHPAD_END: usize = 0x1F8003FF;
@@ -156,7 +156,7 @@ impl Bus {
 		match addr as usize {
 			GPU_START			..= GPU_END => self.gpu.read32(addr),
 			DMA_START			..= DMA_END => self.dma.read32(addr),
-			MEMCONTROL_START	..= MEMCONTROL_END => 0,
+			MEMCONTROL_START	..= MEMCONTROL_END =>  {warn!("[{addr:X}] Unhandled read from memcontrol"); 0 },
 			IRQ_START			..= IRQ_END => self.interrupts.read32(addr),
 			TIMERS_START		..= TIMERS_END => self.timers.read32(addr, scheduler),
 			_ => u32::from_le_bytes([
@@ -167,6 +167,40 @@ impl Bus {
 			]),
 		}
 		
+	}
+
+	pub fn read32_debug(&self, unmasked_addr: u32) -> u32 {
+		if unmasked_addr % 4 != 0 {
+			panic!("unaligned 32 bit read at addr 0x{:X}", unmasked_addr);
+		}
+		
+		let addr = mask_addr(unmasked_addr);
+
+		match addr as usize {
+			DMA_START			..= DMA_END => self.dma.read32(addr),
+			IRQ_START			..= IRQ_END => self.interrupts.read32(addr),
+			_ => u32::from_le_bytes([
+				self.read8_debug(addr),
+				self.read8_debug(addr + 1),
+				self.read8_debug(addr + 2),
+				self.read8_debug(addr + 3),
+			]),
+		}
+		
+	}
+
+	pub fn read8_debug(&self, unmasked_addr: u32) -> u8 {
+		
+		let addr = mask_addr(unmasked_addr);
+
+		match addr as usize {
+			BIOS_START			..=	BIOS_END => self.bios[addr as usize - BIOS_START],
+			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START],
+			SCRATCHPAD_START	..SCRATCHPAD_END => self.scratchpad[addr as usize - SCRATCHPAD_START],
+
+			_ => 0xDE
+		}
+
 	}
 
 	pub fn write8(&mut self, unmasked_addr: u32, write: u8, scheduler: &mut Scheduler) {

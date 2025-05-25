@@ -4,6 +4,14 @@ use crate::{bus::Bus, scheduler::Scheduler};
 
 use super::{Exception, R3000};
 
+pub enum InstrField {
+	Reg(u32),
+	Tgt(u32),
+	Imm(u32),
+	Shamt(u32),
+	Addr(u32, u32)
+}
+
 #[derive(Clone, Copy)]
 pub struct Instruction {
 	raw: u32,
@@ -56,6 +64,143 @@ impl Instruction {
 	pub fn funct(&self) -> u32 {
 		self.raw & 0x3F
 	}
+
+	pub fn dissasemble(&self) -> (String, Vec<InstrField>) {
+
+		macro_rules! rd_rs_rt {
+			() => {
+				vec![InstrField::Reg(self.reg_dst()), InstrField::Reg(self.reg_src()), InstrField::Reg(self.reg_tgt())]
+			};
+		}
+
+		macro_rules! rt_rs_imm {
+			() => {
+				vec![InstrField::Reg(self.reg_tgt()), InstrField::Reg(self.reg_src()), InstrField::Imm(self.imm16())]
+			};
+		}
+
+		macro_rules! rt_rs_imm_se {
+			() => {
+				vec![InstrField::Reg(self.reg_tgt()), InstrField::Reg(self.reg_src()), InstrField::Imm(self.imm16_se())]
+			};
+		}
+
+		macro_rules! rs_imm_se {
+			() => {
+				vec![InstrField::Reg(self.reg_src()), InstrField::Imm(self.imm16_se())]
+			};
+		}
+
+		macro_rules! rt_rd {
+			() => {
+				vec![InstrField::Reg(self.reg_tgt()), InstrField::Reg(self.reg_dst())]
+			};
+		}
+
+		macro_rules! rs_rt {
+			() => {
+				vec![InstrField::Reg(self.reg_src()), InstrField::Reg(self.reg_tgt())]
+			};
+		}
+
+		macro_rules! rt_addr {
+			() => {
+				vec![InstrField::Reg(self.reg_tgt()), InstrField::Addr(self.imm16_se() << 2, self.reg_src())]
+			};
+		}
+
+		match self.opcode() {
+
+			0x00 => match self.funct() {
+				0x00 => ("sll".to_string(), vec![InstrField::Reg(self.reg_dst()), InstrField::Reg(self.reg_tgt()), InstrField::Shamt(self.shamt())]),
+				0x02 => ("srl".to_string(), vec![InstrField::Reg(self.reg_dst()), InstrField::Reg(self.reg_tgt()), InstrField::Shamt(self.shamt())]),
+				0x03 => ("sra".to_string(), vec![InstrField::Reg(self.reg_dst()), InstrField::Reg(self.reg_tgt()), InstrField::Shamt(self.shamt())]),
+				0x04 => ("sllv".to_string(), vec![InstrField::Reg(self.reg_dst()), InstrField::Reg(self.reg_tgt()), InstrField::Reg(self.reg_src())]),
+				0x06 => ("srlv".to_string(), vec![InstrField::Reg(self.reg_dst()), InstrField::Reg(self.reg_tgt()), InstrField::Reg(self.reg_src())]),
+				0x07 => ("srav".to_string(), vec![InstrField::Reg(self.reg_dst()), InstrField::Reg(self.reg_tgt()), InstrField::Reg(self.reg_src())]),
+				0x08 => ("jr".to_string(), vec![InstrField::Reg(self.reg_src())]),
+				0x09 => ("jalr".to_string(), vec![InstrField::Reg(self.reg_dst()), InstrField::Reg(self.reg_src())]),
+				0x0C => ("syscall".to_string(), vec![]),
+				0x0D => ("break".to_string(), vec![]),
+				0x10 => ("mfhi".to_string(), vec![InstrField::Reg(self.reg_dst())]),
+				0x11 => ("mthi".to_string(), vec![InstrField::Reg(self.reg_src())]),
+				0x12 => ("mflo".to_string(), vec![InstrField::Reg(self.reg_dst())]),
+				0x13 => ("mtlo".to_string(), vec![InstrField::Reg(self.reg_src())]),
+				0x18 => ("mult".to_string(), rs_rt!()),
+				0x19 => ("multu".to_string(), rs_rt!()),
+				0x1A => ("div".to_string(), rs_rt!()),
+				0x1B => ("divu".to_string(), rs_rt!()),
+				0x20 => ("add".to_string(), rd_rs_rt!()),
+				0x21 => ("addu".to_string(), rd_rs_rt!()),
+				0x22 => ("sub".to_string(), rd_rs_rt!()),
+				0x23 => ("subu".to_string(), rd_rs_rt!()),
+				0x24 => ("and".to_string(), rd_rs_rt!()),
+				0x25 => ("or".to_string(), rd_rs_rt!()),
+				0x26 => ("xor".to_string(), rd_rs_rt!()),
+				0x27 => ("nor".to_string(), rd_rs_rt!()),
+				0x2A => ("slt".to_string(), rd_rs_rt!()),
+				0x2B => ("sltu".to_string(), rd_rs_rt!()),
+
+				_ => ("illegal".to_string(), vec![]),
+			}
+
+			0x01 => ("bcondz".to_string(), rs_imm_se!()),
+
+			0x02 => ("j".to_string(), vec![InstrField::Tgt(self.imm26() << 2)]),
+			0x03 => ("jal".to_string(), vec![InstrField::Tgt(self.imm26() << 2)]),
+			0x04 => ("beq".to_string(), vec![InstrField::Reg(self.reg_src()), InstrField::Reg(self.reg_tgt()), InstrField::Tgt(self.imm16_se() << 2)]),
+			0x05 => ("bne".to_string(), vec![InstrField::Reg(self.reg_src()), InstrField::Reg(self.reg_tgt()), InstrField::Tgt(self.imm16_se() << 2)]),
+			0x06 => ("blez".to_string(), rs_imm_se!()),
+			0x07 => ("bgtz".to_string(), rs_imm_se!()),
+			0x08 => ("addi".to_string(), rt_rs_imm_se!()),
+			0x09 => ("addiu".to_string(), rt_rs_imm_se!()),
+			0x0A => ("slti".to_string(), rt_rs_imm_se!()),
+			0x0B => ("sltiu".to_string(), rt_rs_imm_se!()),
+			0x0C => ("andi".to_string(), rt_rs_imm!()),
+			0x0D => ("ori".to_string(), rt_rs_imm!()),
+			0x0E => ("xori".to_string(), rt_rs_imm!()),
+			0x0F => ("lui".to_string(), vec![InstrField::Reg(self.reg_tgt()), InstrField::Imm(self.imm16() << 16)]),
+
+			0x10 => match self.cop0_opcode() {
+				0x00 => ("mfc".to_string(), rt_rd!()),
+				0x02 => ("cfc".to_string(), rt_rd!()),
+				0x04 => ("mtc".to_string(), rt_rd!()),
+				0x06 => ("ctc".to_string(), rt_rd!()),
+				0x10 => ("rfe".to_string(), vec![]),
+				_ => ("illegal".to_string(), vec![]),
+			}
+
+			0x11 => ("copn".to_string(), vec![]),
+			0x12 => ("gte".to_string(), vec![]),
+			0x13 => ("copn".to_string(), vec![]),
+
+			0x20 => ("lb".to_string(), rt_addr!()),
+			0x21 => ("lh".to_string(), rt_addr!()),
+			0x22 => ("lwl".to_string(), rt_addr!()),
+			0x23 => ("lw".to_string(), rt_addr!()),
+			0x24 => ("lbu".to_string(), rt_addr!()),
+			0x25 => ("lhu".to_string(), rt_addr!()),
+			0x26 => ("lwr".to_string(), rt_addr!()),
+			0x28 => ("sb".to_string(), rt_addr!()),
+			0x29 => ("sh".to_string(), rt_addr!()),
+			0x2A => ("swl".to_string(), rt_addr!()),
+			0x2B => ("sw".to_string(), rt_addr!()),
+			0x2E => ("swr".to_string(), rt_addr!()),
+
+			0x30 => ("lwcn".to_string(), rt_addr!()),
+			0x31 => ("lwcn".to_string(), rt_addr!()),
+			0x32 => ("lwc_gte".to_string(), rt_addr!()),
+			0x33 => ("lwcn".to_string(), rt_addr!()),
+			0x38 => ("swcn".to_string(), rt_addr!()),
+			0x39 => ("swcn".to_string(), rt_addr!()),
+			0x3A => ("swc_gte".to_string(), rt_addr!()),
+			0x3B => ("swcn".to_string(), rt_addr!()),
+
+			_ => ("illegal".to_string(), vec![]),
+		}
+
+	}
+
 }
 
 impl R3000 {
@@ -147,99 +292,6 @@ impl R3000 {
 			0x3B => self.op_swcn(),
 
 			_ => self.op_illegal(instr),
-		}
-
-	}
-
-	#[allow(dead_code)]
-	pub fn dissasemble(&self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) -> String {
-
-		match instr.opcode() {
-
-			0x00 => match instr.funct() {
-				0x00 => format!("sll ${}, ${}, {}", instr.reg_dst(), instr.reg_tgt(), instr.shamt()),
-				0x02 => "srl".to_string(),
-				0x03 => "sra".to_string(),
-				0x04 => "sllv".to_string(),
-				0x06 => "srlv".to_string(),
-				0x07 => "srav".to_string(),
-				0x08 => "jr".to_string(),
-				0x09 => "jalr".to_string(),
-				0x0C => "syscall".to_string(),
-				0x0D => "break".to_string(),
-				0x10 => "mfhi".to_string(),
-				0x11 => "mthi".to_string(),
-				0x12 => "mflo".to_string(),
-				0x13 => "mtlo".to_string(),
-				0x18 => "mult".to_string(),
-				0x19 => "multu".to_string(),
-				0x1A => "div".to_string(),
-				0x1B => "divu".to_string(),
-				0x20 => "add".to_string(),
-				0x21 => "addu".to_string(),
-				0x22 => "sub".to_string(),
-				0x23 => "subu".to_string(),
-				0x24 => format!("and ${}, ${}, ${}", instr.reg_dst(), instr.reg_src(), instr.reg_tgt()),
-				0x25 => "or".to_string(),
-				0x26 => "xor".to_string(),
-				0x27 => "nor".to_string(),
-				0x2A => "slt".to_string(),
-				0x2B => format!("sltu ${}, ${}, ${}", instr.reg_dst(), instr.reg_src(), instr.reg_tgt()),
-
-				_ => "illegal".to_string(),
-			}
-
-			0x01 => "bcondz".to_string(),
-
-			0x02 => "j".to_string(),
-			0x03 => "jal".to_string(),
-			0x04 => format!("beq ${}, ${}, 0x{:X} (jmp: 0x{:X})", instr.reg_src(), instr.reg_tgt(), instr.imm16_se() << 2, self.pc.wrapping_add(instr.imm16_se() << 2).wrapping_add(4)),
-			0x05 => format!("bne ${}, ${}, 0x{:X} (jmp: 0x{:X})", instr.reg_src(), instr.reg_tgt(), instr.imm16_se() << 2, self.pc.wrapping_add(instr.imm16_se() << 2).wrapping_add(4)),
-			0x06 => "blez".to_string(),
-			0x07 => "bgtz".to_string(),
-			0x08 => "addi".to_string(),
-			0x09 => format!("addiu ${}, ${}, 0x{:X}", instr.reg_tgt(), instr.reg_src(), instr.imm16_se()),
-			0x0A => "slti".to_string(),
-			0x0B => "sltiu".to_string(),
-			0x0C => format!("andi ${}, ${}, 0x{:X}", instr.reg_tgt(), instr.reg_src(), instr.imm16_se()),
-			0x0D => "ori".to_string(),
-			0x0E => "xori".to_string(),
-			0x0F => "lui".to_string(),
-
-			0x10 => match instr.cop0_opcode() {
-				0x00 => "mfc".to_string(),
-				0x04 => "mtc".to_string(),
-				0x10 => "rfe".to_string(),
-				_ => "illegal".to_string(),
-			}
-
-			0x11 => "copn".to_string(),
-			0x12 => "gte".to_string(),
-			0x13 => "copn".to_string(),
-
-			0x20 => "lb".to_string(),
-			0x21 => "lh".to_string(),
-			0x22 => "lwl".to_string(),
-			0x23 => format!("lw ${}, 0x{:X}(${}) [0x{:X}](0x{:X})", instr.reg_tgt(), instr.imm16_se(), instr.reg_src(), self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se()), bus.read32(self.registers.read_gpr(instr.reg_src()).wrapping_add(instr.imm16_se()), scheduler)),
-			0x24 => "lbu".to_string(),
-			0x25 => "lhu".to_string(),
-			0x26 => "lwr".to_string(),
-			0x28 => format!("sb ${}, 0x{:X}(${})", instr.reg_dst(), instr.imm16(), instr.reg_src()),
-			0x29 => "sh".to_string(),
-			0x2A => "swl".to_string(),
-			0x2B => "sw".to_string(),
-			0x2E => "swr".to_string(),
-
-			0x30 => "lwcn".to_string(),
-			0x31 => "lwcn".to_string(),
-			0x32 => "lwc_gte".to_string(),
-			0x33 => "lwcn".to_string(),
-			0x38 => "swcn".to_string(),
-			0x39 => "swcn".to_string(),
-			0x3A => "swc_gte".to_string(),
-			0x3B => "swcn".to_string(),
-
-			_ => "illegal".to_string(),
 		}
 
 	}

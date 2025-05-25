@@ -192,17 +192,18 @@ impl Sio0 {
     }
 
     fn write_ctrl(&mut self, write: u16) {
+        trace!("write ctrl 0x{write:X} state: {:?}", self.tx_state);
         
         self.tx_enable = write & 1 != 0;
         
         if self.tx_enable && self.tx_state == TxState::Disabled {
+            trace!("enable TX");
             self.tx_state = TxState::Ready;
         } else if self.tx_enable == false {
+            trace!("disable TX");
             self.tx_state = TxState::Disabled;
         }
         
-        trace!("write ctrl 0x{write:X} state: {:?}", self.tx_state);
-
         self.cs = (write >> 1) & 1 != 0;
         self.rx_enable = (write >> 2) & 1 != 0;
         
@@ -234,12 +235,20 @@ impl Sio0 {
             },
             TxState::Ready => {
                 if write as usize == CONTROLLER_ADDR {
+                    
+                    if !self.port_select && !self.cs || self.port_select && self.cs {
+                        self.push_rx(scheduler, 0xFF, false);
+                        self.ack = false;
+                        return;
+                    }
                     // reply Hi-Z
                     self.push_rx(scheduler, 0, true);
                     // fire an interrupt whenever a byte is received by a device
                     trace!("start transfer");
 
                 } else if write as usize == MEMCARD_ADDR {
+                    warn!("tried to read memcard");
+
                     self.push_rx(scheduler, 0xFF, false);
                     self.ack = false;
                     return;
@@ -249,7 +258,7 @@ impl Sio0 {
             },
             TxState::Transfering { index } => {
                 // TODO for now always assuming the device is a controller
-                if index == 0 && write != 0x42 {
+                if index == 0 && write != 0x42 && self.port_select == false {
                     // invalid command, abort transfer
                     error!("abort transfer 0x{write:X}");
                     self.push_rx(scheduler, 0xFF, false);

@@ -3,7 +3,7 @@ use bus::Bus;
 use scheduler::{EventType, Scheduler, SchedulerEvent};
 use cdrom::disc::Disc;
 
-mod cpu;
+pub mod cpu;
 mod gpu;
 mod dma;
 pub mod cdrom;
@@ -15,8 +15,8 @@ pub mod bus;
 
 pub struct PSXEmulator {
 	pub cpu: R3000,
-	bus: Bus,
-	scheduler: Scheduler,
+	pub bus: Bus,
+	pub scheduler: Scheduler,
 
 	out_vram: Box<[u16]>,
 }
@@ -47,6 +47,7 @@ impl PSXEmulator {
 		}
 
 		self.cpu.run_instruction(&mut self.bus, &mut self.scheduler);
+		self.scheduler.tick_scheduler(2);
 	}
 
 	pub fn run_frame(&mut self) {

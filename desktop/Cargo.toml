@@ -6,7 +6,8 @@ default-run = "desktop"
 
 [dependencies]
 psx = { path = "../psx"}
-eframe = "0.29.1"
+eframe = "0.31.1"
+egui_extras = "0.31.1"
 rcue = "0.1.3"
 env_logger = { workspace = true }
 log = { workspace = true }
