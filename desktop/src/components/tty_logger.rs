@@ -2,7 +2,7 @@ use eframe::egui::Ui;
 use psx::PSXEmulator;
 
 pub struct TTYLogger {
-	out_buf: String
+	pub out_buf: String
 }
 
 impl TTYLogger {
@@ -13,7 +13,6 @@ impl TTYLogger {
 	}
 
 	pub fn show(&mut self, ui: &mut Ui, psx: &mut PSXEmulator) {
-
 		// this is probably terrible for performance
 		self.out_buf.push_str(psx.get_tty_buf().as_str());
 

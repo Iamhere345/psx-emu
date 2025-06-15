@@ -1,18 +1,11 @@
-use std::fs::{self, File};
-use std::io::Read;
-use std::path::PathBuf;
-
 use eframe::egui::{self, Key};
 use eframe::{App, CreationContext};
 
-use rcue::parser::parse_from_file;
-
 use psx::PSXEmulator;
-use psx::cdrom::disc::Disc;
 
 use crate::components::{control::*, vram::*, tty_logger::*, disassembly::*};
 
-const BIOS_PATH: &str = "res/SCPH1001.bin";
+pub const BIOS_PATH: &str = "res/SCPH1001.bin";
 
 const BTN_UP: Key		= Key::W;
 const BTN_DOWN: Key		= Key::S;
@@ -43,30 +36,10 @@ pub struct Desktop {
 impl Desktop {
 	pub fn new(cc: &CreationContext) -> Self {
 
-		let bios = fs::read(BIOS_PATH).unwrap();
+		let bios = std::fs::read(BIOS_PATH).unwrap();
 
 		#[allow(unused_mut)]
 		let mut psx = PSXEmulator::new(bios);
-		//load_disc(r"E:\Roms\PS1\Ridge Racer (USA)\Ridge Racer (USA).cue", &mut psx);
-		//load_disc(r"E:\Roms\PS1\Puzzle Bobble\Puzzle Bobble 2 (Japan).cue", &mut psx);
-		
-		//load_disc("res/hello-tests/hello_cd.cue", &mut psx);
-		//psx.sideload_exe(fs::read("res/hello-tests/hello_cd.exe").unwrap());
-
-		//load_disc(r"E:\Roms\PS1\Crash Bandicoot\Crash Bandicoot (Europe, Australia).cue", &mut psx);
-		//load_disc(r"E:\Roms\PS1\Mega Man X4 (USA)\Mega Man X4 (USA).cue", &mut psx);
-		//load_disc(r"E:\Roms\PS1\Gran Turismo 2 Arcade NTSCJAP\GRANTURISMO2.CUE", &mut psx);
-		//load_disc(r"E:\Roms\PS1\Mortal Kombat II (Japan)\Mortal Kombat II (Japan).cue", &mut psx);
-		load_disc(r"C:\Users\lunar\Downloads\SONICPSX\GAME.cue", &mut psx);
-		//load_disc(r"E:\Roms\PS1\Castlevania - Symphony of the Night (USA)\Castlevania - Symphony of the Night (USA).cue", &mut psx);
-		//load_disc(r"E:\Roms\PS1\Metal Gear Solid\Metal Gear Solid (Europe) (Disc 1).cue", &mut psx);
-
-		//psx.sideload_exe(fs::read("res/hello-tests/hello_pad.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/pong.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/redux-tests/dma.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/RenderTextureRectangle15BPP.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/psxtest_cpx.exe").unwrap());
-		//psx.sideload_exe(fs::read("res/tests/benchmark.exe").unwrap());
 
 		Self {
 			psx: psx,
@@ -113,11 +86,7 @@ impl App for Desktop {
 
 		self.handle_input(ctx);
 
-		if !self.control.paused {
-			//for _ in 0..CYCLES_PER_SECOND {
-				//self.psx.tick();
-			//}
-			
+		if !self.control.paused {			
 			self.psx.run_frame();
 		}
 
@@ -128,7 +97,7 @@ impl App for Desktop {
 		
 		if self.control_open {
 			egui::Window::new("CPU").show(ctx, |ui| {
-				self.control.show(ui);
+				self.control.show(ui, &mut self.psx, &mut self.tty_logger);
 
 				ui.separator();
 
@@ -150,29 +119,4 @@ impl App for Desktop {
 
 		ctx.request_repaint();
 	}
-}
-
-fn load_disc(cue_path: &str, psx: &mut PSXEmulator) {
-	let cue = parse_from_file(cue_path, false).unwrap();
-
-	let mut cue_dir = PathBuf::from(cue_path);
-	cue_dir.pop();
-
-	let mut tracks: Vec<Vec<u8>> = Vec::new();
-
-	for track in cue.files {
-		let mut track_path = cue_dir.clone();
-		track_path.push(track.file);
-
-		let mut track_file = File::open(track_path).unwrap();
-
-		let mut data = Vec::new();
-		track_file.read_to_end(&mut data).expect("Unable to read track data");
-
-		tracks.push(data);
-	}
-
-	let disc = Disc::new(tracks);
-
-	psx.load_disc(disc);
 }
