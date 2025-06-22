@@ -17,7 +17,6 @@ const REG_NAMES: [&str; 32] = [
 
 const DISASM_LINES: usize = 1024;
 const LINE_ACTIVE: char = '>';
-const LINE_BREAKPOINT: char = '⏺';
 
 pub struct Disassembly {
 	target_addr: u32,
@@ -94,7 +93,7 @@ impl Disassembly {
 
 	fn show_row(&mut self, row: &mut TableRow, start_addr: u32, psx: &mut PSXEmulator) {
 		let instr_addr = start_addr + (row.index() * 4) as u32;
-		let instr = Instruction::from_u32(psx.bus.read32_debug(instr_addr));
+		let instr = psx.bus.read32_debug(instr_addr);
 
 		let mut status = RichText::new(' ');
 
@@ -116,10 +115,16 @@ impl Disassembly {
 		});
 	}
 
-	fn dissasemble_instr(&mut self, instr: Instruction, ui: &mut Ui, psx: &mut PSXEmulator) {
+	fn dissasemble_instr(&mut self, instr_raw: u32, ui: &mut Ui, psx: &mut PSXEmulator) {
+		let instr = Instruction::from_u32(instr_raw);
+
 		let (mnemonic, fields) = instr.dissasemble();
 
 		let mut desc = String::new();
+
+		if mnemonic == "illegal" {
+			desc = format!("0x{instr_raw:08X}");
+		}
 
 		let style = Style::default();
 		let mut disasm_line = LayoutJob::default();
@@ -164,7 +169,7 @@ impl Disassembly {
 						.monospace()
 						.color(Color32::from_rgb(209, 154, 102))
 						.append_to(&mut disasm_line, &style, eframe::egui::FontSelection::Default, eframe::egui::Align::Min);
-				}
+				},
 				InstrField::Imm(imm) => {
 					RichText::new(format!("0x{imm:X}"))
 						.monospace()

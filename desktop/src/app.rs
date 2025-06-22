@@ -1,8 +1,9 @@
-use eframe::egui::{self, Key};
+use eframe::egui::{self, Align2, Key};
 use eframe::{App, CreationContext};
 
 use psx::PSXEmulator;
 
+use crate::components::kernel_logger::KernelLogger;
 use crate::components::{control::*, vram::*, tty_logger::*, disassembly::*};
 
 pub const BIOS_PATH: &str = "res/SCPH1001.bin";
@@ -28,6 +29,7 @@ pub struct Desktop {
 	control: Control,
 	vram: VramViewer,
 	tty_logger: TTYLogger,
+	kernel_logger: KernelLogger,
 	disassembly: Disassembly,
 
 	control_open: bool,
@@ -40,13 +42,13 @@ impl Desktop {
 
 		#[allow(unused_mut)]
 		let mut psx = PSXEmulator::new(bios);
-
 		Self {
 			psx: psx,
 
 			control: Control::new(),
 			vram: VramViewer::new(cc),
 			tty_logger: TTYLogger::new(),
+			kernel_logger: KernelLogger::new(),
 			disassembly: Disassembly::new(),
 
 			control_open: true,
@@ -86,8 +88,12 @@ impl App for Desktop {
 
 		self.handle_input(ctx);
 
-		if !self.control.paused {			
+		if !self.control.paused && !self.psx.breakpoint_hit {			
 			self.psx.run_frame();
+
+			if self.psx.breakpoint_hit {
+				self.control.paused = true;
+			}
 		}
 
 		if self.control.step {
@@ -97,7 +103,7 @@ impl App for Desktop {
 		
 		if self.control_open {
 			egui::Window::new("CPU").show(ctx, |ui| {
-				self.control.show(ui, &mut self.psx, &mut self.tty_logger);
+				self.control.show(ui, ctx, &mut self.psx, &mut self.tty_logger);
 
 				ui.separator();
 
@@ -109,7 +115,11 @@ impl App for Desktop {
 			self.vram.show(ui, &self.psx);
 		});
 
-		egui::Window::new("TTY Output").show(ctx, |ui| {
+		egui::Window::new("Kernel Log").default_open(false).show(ctx, |ui| {
+			self.kernel_logger.show(ui, &mut self.psx.cpu.kernel_log);
+		});
+
+		egui::Window::new("TTY Output").pivot(Align2::LEFT_TOP).show(ctx, |ui| {
 			egui::ScrollArea::vertical()
 				.stick_to_bottom(true)
 				.show(ui, |ui| {

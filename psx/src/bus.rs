@@ -13,7 +13,8 @@ const BIOS_START: usize = 0x1FC00000;
 const BIOS_END: usize = BIOS_START + (512 * 1024);
 
 const RAM_START: usize = 0x0;
-const RAM_END: usize = RAM_START + (2048 * 1024) - 1;
+const RAM_END: usize = 0x7FFFFF;
+const RAM_SIZE: usize = 0x1FFFFF;
 
 const SCRATCHPAD_START: usize = 0x1F800000;
 const SCRATCHPAD_END: usize = 0x1F8003FF;
@@ -28,7 +29,7 @@ const IRQ_START: usize = 0x1F801070;
 const IRQ_END: usize = 0x1F801074;
 
 const SPU_START: usize = 0x1F801C00;
-const SPU_END: usize = SPU_START + 0x280;
+const SPU_END: usize = 0x1F801E80;
 
 const TIMERS_START: usize = 0x1F801100;
 const TIMERS_END: usize = 0x1F80112F;
@@ -73,6 +74,10 @@ pub struct Bus {
 	pub interrupts: Interrupts,
 	pub timers: Timers,
 	pub sio0: Sio0,
+
+	pub read_breakpoints: Vec<u32>,
+	pub write_breakpoints: Vec<u32>,
+	pub breakpoint_hit: (bool, u32),
 }
 
 fn mask_addr(addr: u32) -> u32 {
@@ -92,6 +97,10 @@ impl Bus {
 			interrupts: Interrupts::new(),
 			timers: Timers::new(),
 			sio0: Sio0::new(),
+
+			read_breakpoints: Vec::new(),
+			write_breakpoints: Vec::new(),
+			breakpoint_hit: (false, 0),
 		}
 	}
 
@@ -101,7 +110,7 @@ impl Bus {
 
 		match addr as usize {
 			BIOS_START			..=	BIOS_END => self.bios[addr as usize - BIOS_START],
-			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START],
+			RAM_START			..= RAM_END => self.ram[(addr as usize) & RAM_SIZE - RAM_START],
 			SCRATCHPAD_START	..SCRATCHPAD_END => self.scratchpad[addr as usize - SCRATCHPAD_START],
 
 			EXPANSION1_START	..= EXPANSION1_END => {info!("read to expansion 1 register 0x{:X}", unmasked_addr); 0xFF},
@@ -135,7 +144,7 @@ impl Bus {
 			]),
 			
 			IRQ_START	..= IRQ_END => self.interrupts.read32(addr) as u16,
-			SPU_START	..= SPU_END => 0,
+			SPU_START	..= SPU_END => { trace!("[{addr:X}] Unhandled SPU read16"); 0 },
 			PAD_START	..= PAD_END => self.sio0.read32(addr) as u16,
 			TIMERS_START..= TIMERS_END => self.timers.read32(addr, scheduler) as u16,
 
@@ -145,8 +154,6 @@ impl Bus {
 	}
 
 	pub fn read32(&mut self, unmasked_addr: u32, scheduler: &mut Scheduler) -> u32 {
-
-		
 		if unmasked_addr % 4 != 0 {
 			panic!("unaligned 32 bit read at addr 0x{:X}", unmasked_addr);
 		}
@@ -159,6 +166,7 @@ impl Bus {
 			MEMCONTROL_START	..= MEMCONTROL_END =>  {warn!("[{addr:X}] Unhandled read from memcontrol"); 0 },
 			IRQ_START			..= IRQ_END => self.interrupts.read32(addr),
 			TIMERS_START		..= TIMERS_END => self.timers.read32(addr, scheduler),
+			SPU_START			..= SPU_END => { trace!("[{addr:X}] Unhandled read to SPU"); 0 }
 			_ => u32::from_le_bytes([
 				self.read8(addr, scheduler),
 				self.read8(addr + 1, scheduler),
@@ -208,7 +216,7 @@ impl Bus {
 		let addr = mask_addr(unmasked_addr);
 
 		match addr as usize {
-			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START] = write,
+			RAM_START			..= RAM_END => self.ram[(addr as usize) & RAM_SIZE - RAM_START] = write,
 			SCRATCHPAD_START	..= SCRATCHPAD_END => self.scratchpad[addr as usize -  SCRATCHPAD_START] = write,
 
 			SPU_START			..= SPU_END => info!("write to SPU register [0x{addr:X}] 0x{write:X}. Ignoring."),
@@ -233,7 +241,7 @@ impl Bus {
 
 		match addr as usize {
 			IRQ_START		..= IRQ_END => self.interrupts.write32(addr, write as u32),
-			SPU_START		..=	SPU_END => {},
+			SPU_START		..=	SPU_END => trace!("[{addr:X}] Unhandled SPU write16 0x{write:X}"),
 			TIMERS_START	..= TIMERS_END => self.timers.write32(addr, write as u32, scheduler),
 			PAD_START ..= PAD_END => self.sio0.write32(addr, write.into(), scheduler),
 			
@@ -276,7 +284,7 @@ impl Bus {
 			MEMCONTROL_START	..=	MEMCONTROL_END => {
 				match addr as usize - MEMCONTROL_START {
 					0 => if write != 0x1F000000 { panic!("write to expansion 1 base addr 0x{:X}", write) },
-					1 => if write != 0x1F802000 { panic!("write to expansion 2 base addr 0x{:X}", write) },
+					4 => if write != 0x1F802000 { panic!("write to expansion 2 base addr 0x{:X}", write) },
 					_ => info!("unhandled write to memcontrol [0x{:X}] 0x{write:X}", addr as usize - MEMCONTROL_START),
 				}
 			}
@@ -302,6 +310,7 @@ impl Bus {
 				}
 			},
 			GPU_START	..= GPU_END => self.gpu.write32(addr, write),
+			SPU_START	..= SPU_END => trace!("[{addr:X}] Unhandled write to SPU 0x{write:X}"),
 
 			_ => panic!("unhandled write32 [0x{:X}/0x{:X}] 0x{:X}", addr, unmasked_addr, write)
 		}

@@ -2,7 +2,7 @@
 
 use log::*;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum Exception {
 	#[default]
 	Interrupt = 0x00,
@@ -175,7 +175,7 @@ impl Cop0 {
 	pub fn write_reg(&mut self, reg_index: u32, write: u32) {
 		
 		if reg_index == 13 {
-			log::info!("write 0x{:X}", write);
+			trace!("CAUSE: write 0x{:X}", write);
 		}
 
 		match reg_index {

@@ -1,6 +1,9 @@
-use std::mem;
+use std::{fmt::Display, mem};
+
+use log::*;
 
 use crate::{bus::Bus, scheduler::Scheduler};
+use crate::kernel::KernelFunction;
 use cop0::*;
 use instructions::Instruction;
 
@@ -73,9 +76,26 @@ impl Registers {
 
 }
 
+impl Display for Registers {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let mut regs: Vec<String> = Vec::new();
+
+		for (i, reg) in self.gpr.iter().enumerate() {
+			regs.push(format!("$r{i}: 0x{reg:08X}, "));
+		}
+
+		regs.push(format!("$hi: 0x{:08X}, ", self.hi));
+		regs.push(format!("$lo: 0x{:08X}", self.lo));
+
+		write!(f, "{}", regs.concat())
+	}
+}
+
 pub struct R3000 {
 	pub registers: Registers,
 	pub pc: u32,
+	last_pc: u32,
+	last_instruction: u32,
 
 	cop0: Cop0,
 
@@ -84,6 +104,7 @@ pub struct R3000 {
 	exception: bool,
 
 	pub tty_buf: String,
+	pub kernel_log: Vec<String>,
 
 	pub debug: bool,
 }
@@ -92,7 +113,9 @@ impl R3000 {
 	pub fn new() -> Self {
 		Self {
 			registers: Registers::new(),
-			pc: 0xbfc00000, // start of BIOS
+			pc: 0xBFC00000, // start of BIOS
+			last_pc: 0,
+			last_instruction: 0,
 			
 			cop0: Cop0::new(),
 
@@ -101,6 +124,7 @@ impl R3000 {
 			exception: false,
 
 			tty_buf: String::new(),
+			kernel_log: Vec::new(),
 
 			debug: false,
 		}
@@ -112,12 +136,19 @@ impl R3000 {
 
 		if self.pc % 4 != 0 {
 			self.exception(Exception::AddrLoadError);
+			self.cop0.reg_badvaddr = self.pc;
 
 			self.registers.process_delayed_loads();
 			return;
 		}
 
+		// check if last jump was to a kernel function
+		if self.in_delay_slot {
+			self.log_kernel_func();
+		}
+
 		let instruction = bus.read32(self.pc, scheduler);
+		self.last_instruction = instruction;
 
 		let (next_pc, in_delay_slot) = match self.delayed_branch.take() {
 			Some(addr) => (addr, true),
@@ -149,6 +180,7 @@ impl R3000 {
 		self.registers.process_delayed_loads();
 
 		if !self.exception {
+			self.last_pc = self.pc;
 			self.pc = next_pc;
 		} else {
 			self.exception = false;
@@ -157,15 +189,14 @@ impl R3000 {
 	}
 
 	fn exception(&mut self, exception: Exception) {
-
 		self.cop0.reg_cause.exception = exception;
-
+		
 		self.cop0.reg_epc = match self.in_delay_slot {
 			true => {self.cop0.reg_cause.branch_delay = true; self.pc.wrapping_sub(4)},
 			false => {self.cop0.reg_cause.branch_delay = false; self.pc}
 		};
-
-		// TODO BadVAddr
+		
+		trace!("exception triggered: {exception:?}, in delay slot: {}, epc: 0x{:X} badvaddr: 0x{:X}", self.in_delay_slot, self.cop0.reg_epc, self.cop0.reg_badvaddr);
 
 		self.cop0.reg_sr.push_exception();
 
@@ -189,5 +220,53 @@ impl R3000 {
 
 			self.tty_buf.push(char);
 		}
+	}
+
+	fn log_kernel_func(&mut self) {
+		let kernel_func = match self.pc {
+			0xA0 => {
+				let num = self.registers.read_gpr(9);
+				KernelFunction::a_func(num)
+			},
+			0xB0 => {
+				let num = self.registers.read_gpr(9);
+				KernelFunction::b_func(num)
+			},
+			0xC0 => {
+				let num = self.registers.read_gpr(9);
+				KernelFunction::c_func(num)
+			},
+
+			_ => return
+		};
+
+		match kernel_func {
+			KernelFunction::ReturnFromException | KernelFunction::Rand
+				| KernelFunction::TestEvent | KernelFunction::Unknown => return,
+			_ => {}
+		}
+
+		let num_args = kernel_func.num_args();
+
+		let args = (4..4 + num_args).into_iter()
+			.map(|i| self.registers.read_gpr(i as u32))
+			.collect::<Vec<u32>>()
+			.into_iter()
+			.map(|reg| format!("0x{reg:08X}"))
+			.collect::<Vec<_>>()
+			.join(", ");
+
+		if kernel_func == KernelFunction::PutChar {
+			self.kernel_log.push(format!("{kernel_func:?}('{}')", char::from_u32(self.registers.read_gpr(4)).unwrap_or('?')));
+		} else {
+			self.kernel_log.push(format!("{kernel_func:?}({args})"));
+		}
+
+	}
+}
+
+impl Drop for R3000 {
+	fn drop(&mut self) {
+		println!("CPU dropped. Last CPU state:\n[0x{:08X}][0x{:08X}] {}\nregs: {}", self.last_pc, self.last_instruction, Instruction::from_u32(self.last_instruction).dissasemble_str(), self.registers)
 	}
 }

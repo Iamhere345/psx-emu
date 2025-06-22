@@ -148,6 +148,8 @@ impl Channel {
 				self.chopping_cpu_window_size = ((write >> 20) & 7) as u8;
 
 				self.pause_transfer = (write >> 29) & 1 != 0;
+
+				self.bus_snooping = (write >> 30) & 1 != 0;
 				
 				trace!("DMA{}: new control {self:X?} (write 0x{write:X})", self.channel_num);
 
@@ -201,6 +203,8 @@ impl DmaControlRegister {
 	}
 
 	pub fn write(&mut self, write: u32) {
+		trace!("DPCR: write: 0x{write:08X} channel_enable: {:?} channel_priority: {:?}", self.channel_enable, self.channel_priority);
+
 		self.channel_priority = array::from_fn(|i| ((write >> (4 * i)) & 7) as u8);
 		self.channel_enable = array::from_fn(|i| ((write >> (3 + 4 * i)) & 1) != 0);
 	}
@@ -306,15 +310,26 @@ impl DmaController {
 	pub fn read32(&self, addr: u32) -> u32 {
 		let channel = (addr >> 0x4) & 0x7;
 
-		//trace!("[0x{addr:X}] DMA{channel} read32");
-
+		
 		match addr {
 			// channel registers
-			0x1F801080	..= 0x1F8010EF => self.channels[channel as usize].read32(addr),
+			0x1F801080	..= 0x1F8010EF => {
+				if channel == 4 {
+					error!("[0x{addr:X}] DMA{channel} read32");
+				}
+				trace!("[0x{addr:X}] DMA{channel} read32");
+				self.channels[channel as usize].read32(addr)
+			},
 			// DMA control
-			0x1F8010F0 => self.control.read(),
+			0x1F8010F0 => {
+				trace!("DPCR read");
+				self.control.read()
+			},
 			// DMA interrupt
-			0x1F8010F4 => self.irq.read(),
+			0x1F8010F4 => {
+				trace!("DICR read");
+				self.irq.read()
+			},
 
 			_ => unreachable!()
 		}
@@ -322,16 +337,26 @@ impl DmaController {
 
 	pub fn write32(&mut self, addr: u32, write: u32) {
 		let channel = (addr >> 0x4) & 0x7;
-
-		//trace!("[0x{addr:X}] DMA{channel} write32 0x{write:X}");
-
+		
 		match addr {
 			// channel registers
-			0x1F801080	..= 0x1F8010EF => self.channels[channel as usize].write32(addr, write),
+			0x1F801080	..= 0x1F8010EF => {
+				if channel == 4 {
+					error!("[0x{addr:X}] DMA{channel} write32 0x{write:X}");
+				}
+				trace!("[0x{addr:X}] DMA{channel} write32 0x{write:X}");
+				self.channels[channel as usize].write32(addr, write)
+			},
 			// DMA control
-			0x1F8010F0 => self.control.write(write),
+			0x1F8010F0 => {
+				trace!("DPCR write 0x{write:X}");
+				self.control.write(write)
+			},
 			// DMA interrupt
-			0x1F8010F4 => self.irq.write(write),
+			0x1F8010F4 => {
+				trace!("DICR write 0x{write:X}");
+				self.irq.write(write)
+			},
 
 			_ => unreachable!()
 		}

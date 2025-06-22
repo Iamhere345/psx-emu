@@ -190,7 +190,7 @@ impl Cdrom {
 			// RDDATA
 			2 => {
 				let data = self.data_fifio.pop_front().or(Some(0)).unwrap();
-				//trace!("read data fifo: 0x{data:X}");
+				trace!("read data fifo: 0x{data:X}");
 
 				data
 			},
@@ -215,7 +215,7 @@ impl Cdrom {
 				0 => self.write_status(write),
 				1 => self.exec_cmd(write, scheduler),
 				2 => { info!("write 0x{write:X} to fifo"); self.params_fifo.push_back(write) },
-				3 => debug!("request register write: BFRD: {}", (write >> 7) & 1),
+				3 => debug!("request register write: BFRD: {} DRQSTS: {}", (write >> 7) & 1, !self.data_fifio.is_empty()),
 				_ => todo!("CDROM write [0x{addr:X}][{}] 0x{write:X}", self.bank),
 			},
 			1 => match reg {
@@ -249,7 +249,9 @@ impl Cdrom {
 			| (u8::from(!self.result_fifo.is_empty()) << 5)
 			| (u8::from(!self.data_fifio.is_empty()) << 6);
 
-		//trace!("read status: 0b{result:b}");
+		if !self.data_fifio.is_empty() {
+			//debug!("read DRQSTS true");
+		}
 
 		result
 	}

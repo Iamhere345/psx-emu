@@ -1,5 +1,5 @@
 //#![windows_subsystem = "windows"]
-use eframe::{egui::{Vec2, ViewportBuilder}, NativeOptions};
+use eframe::{egui::{Align2, Pos2, Vec2, ViewportBuilder}, NativeOptions};
 use env_logger::*;
 
 use app::Desktop;
@@ -14,7 +14,8 @@ fn main() {
 	builder.init();
 
 	let viewport = ViewportBuilder {
-		inner_size: Some(Vec2::new(1680.0, 720.0)),
+		inner_size: Some(Vec2::new(1800.0, 720.0)),
+		position: Some(Pos2::new(0.0, 0.0)),
 		..Default::default()
 	};
 

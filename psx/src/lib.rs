@@ -10,6 +10,7 @@ pub mod cdrom;
 mod interrupts;
 mod timers;
 mod sio0;
+mod kernel;
 mod scheduler;
 pub mod bus;
 
@@ -17,6 +18,9 @@ pub struct PSXEmulator {
 	pub cpu: R3000,
 	pub bus: Bus,
 	pub scheduler: Scheduler,
+
+	pub pc_breakpoints: Vec<u32>,
+	pub breakpoint_hit: bool,
 
 	out_vram: Box<[u16]>,
 }
@@ -28,6 +32,9 @@ impl PSXEmulator {
 			bus: Bus::new(bios),
 			scheduler: Scheduler::new(),
 
+			pc_breakpoints: Vec::new(),
+			breakpoint_hit: false,
+
 			out_vram: vec![0; 512 * 2048].into_boxed_slice().try_into().unwrap(),
 		};
 
@@ -37,6 +44,9 @@ impl PSXEmulator {
 	}
 
 	pub fn tick(&mut self) {
+		self.breakpoint_hit = false;
+		self.bus.breakpoint_hit = (false, 0);
+
 		if self.scheduler.next_event_ready() {
 			let event = self.scheduler.pop_event();
 			self.scheduler.handle_event(event.clone(), &mut self.bus);
@@ -48,15 +58,26 @@ impl PSXEmulator {
 
 		self.cpu.run_instruction(&mut self.bus, &mut self.scheduler);
 		self.scheduler.tick_scheduler(2);
+
+		if self.pc_breakpoints.contains(&self.cpu.pc) || self.bus.breakpoint_hit.0 {
+			self.breakpoint_hit = true;
+		}
 	}
 
 	pub fn run_frame(&mut self) {
-		
+		self.breakpoint_hit = false;
+		self.bus.breakpoint_hit = (false, 0);
+
 		loop {
 			while !self.scheduler.next_event_ready() {
 				self.cpu.run_instruction(&mut self.bus, &mut self.scheduler);
-
 				self.scheduler.tick_scheduler(2);
+
+				if self.pc_breakpoints.contains(&self.cpu.pc) || self.bus.breakpoint_hit.0 {
+					self.breakpoint_hit = true;
+					return;
+				}
+
 			}
 
 			let last_event = self.scheduler.pop_event();

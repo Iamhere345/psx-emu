@@ -134,11 +134,12 @@ impl Cdrom {
 		
 		self.data_fifio.clear();
 
-		debug!("ReadN START");
-
+		
 		if !self.seek_complete {
 			self.current_seek = self.seek_target;
 		}
+		
+		debug!("ReadN START @ {}", self.current_seek);
 
 		let mut first_response = CmdResponse::int3_status(self);
 
@@ -188,7 +189,7 @@ impl Cdrom {
 	}
 
 	pub fn pause(&mut self) -> (CmdResponse, u64) {
-		debug!("Pause");
+		debug!("Pause @ read {}", self.current_seek + self.read_offset);
 
 		let mut first_response = CmdResponse::int3_status(self);
 
