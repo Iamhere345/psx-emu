@@ -69,84 +69,82 @@ impl Breakpoints {
 		}
 	}
 
-	pub fn show(&mut self, ctx: &egui::Context, psx: &mut PSXEmulator, bp_open: &mut bool, new_bp_open: &mut bool) {
-		egui::Window::new("Breakpoints").open(bp_open).show(ctx, |ui| {
-			if ui.button("Add Breakpoint").clicked() {
-				*new_bp_open = true;
-			}
+	pub fn show(&mut self, ui: &mut egui::Ui, psx: &mut PSXEmulator, new_bp_open: &mut bool) {
+		if ui.button("Add Breakpoint").clicked() {
+			*new_bp_open = true;
+		}
 
-			ui.separator();
+		ui.separator();
 
-			let table = TableBuilder::new(ui)
-				.column(Column::auto().at_least(80.0))
-				.column(Column::auto().at_least(80.0))
-				.column(Column::auto().at_least(40.0))
-				.column(Column::auto().at_least(5.0))
-				.column(Column::remainder())
-				.striped(true);
+		let table = TableBuilder::new(ui)
+			.column(Column::auto().at_least(80.0))
+			.column(Column::auto().at_least(80.0))
+			.column(Column::auto().at_least(40.0))
+			.column(Column::auto().at_least(5.0))
+			.column(Column::remainder())
+			.striped(true);
 
-			table.header(20.0, |mut header| {
-				header.col(|ui| {
-					ui.label("Label");
-				});
-				header.col(|ui| {
-					ui.label("Address");
-				});
-				header.col(|ui| {
-					ui.label("Type");
-				});
-				header.col(|ui| {
-					ui.label("Active");
-				});
-				header.col(|ui| {
-					ui.label("Remove");
-				});
-			})
-			.body(|body| {
-				body.rows(19.0, self.breakpoints.len(), |mut row| {
-					let i = row.index();
+		table.header(20.0, |mut header| {
+			header.col(|ui| {
+				ui.label("Label");
+			});
+			header.col(|ui| {
+				ui.label("Address");
+			});
+			header.col(|ui| {
+				ui.label("Type");
+			});
+			header.col(|ui| {
+				ui.label("Active");
+			});
+			header.col(|ui| {
+				ui.label("Remove");
+			});
+		})
+		.body(|body| {
+			body.rows(19.0, self.breakpoints.len(), |mut row| {
+				let i = row.index();
 
-					if psx.breakpoint_hit && self.breakpoints[i].is_hit(psx) {
-						row.set_selected(true);
+				if psx.breakpoint_hit && self.breakpoints[i].is_hit(psx) {
+					row.set_selected(true);
+				}
+
+				// label
+				row.col(|ui| {
+					ui.label(self.breakpoints[i].label.clone());
+				});
+				// address
+				row.col(|ui| {
+					ui.monospace(format!("0x{:08X}", self.breakpoints[i].address));
+				});
+				// breakpoint type
+				row.col(|ui| {
+					ui.label(format!("{}", self.breakpoints[i].breakpoint_type));
+				});
+				// active
+				row.col(|ui| {
+					if ui.checkbox(&mut self.breakpoints[i].active, "").changed() {
+						// re-add breakpoint to emulator
+						match self.breakpoints[i].active {
+							true => {
+								println!("re-enable breakpoint");
+								let index = emu_add_breakpoint(&self.breakpoints[i], psx);
+
+								self.breakpoints[i].emu_index = index;
+							},
+							// remove breakpoint from emulator
+							false => {
+								emu_remove_breakpoint(&self.breakpoints[i], psx);
+							}
+						};
 					}
-
-					// label
-					row.col(|ui| {
-						ui.label(self.breakpoints[i].label.clone());
-					});
-					// address
-					row.col(|ui| {
-						ui.monospace(format!("0x{:08X}", self.breakpoints[i].address));
-					});
-					// breakpoint type
-					row.col(|ui| {
-						ui.label(format!("{}", self.breakpoints[i].breakpoint_type));
-					});
-					// active
-					row.col(|ui| {
-						if ui.checkbox(&mut self.breakpoints[i].active, "").changed() {
-							// re-add breakpoint to emulator
-							match self.breakpoints[i].active {
-								true => {
-									println!("re-enable breakpoint");
-									let index = emu_add_breakpoint(&self.breakpoints[i], psx);
-
-									self.breakpoints[i].emu_index = index;
-								},
-								// remove breakpoint from emulator
-								false => {
-									emu_remove_breakpoint(&self.breakpoints[i], psx);
-								}
-							};
-						}
-					});
-					// remove
-					row.col(|ui| {
-						if ui.button("x").clicked() {
-							// can't directly remove the breakpoint here otherwise the loop will have the wrong index
-							self.remove_bp = (true, i);
-						}
-					});
+				});
+				// remove
+				row.col(|ui| {
+					if ui.button("x").clicked() {
+						// can't directly remove the breakpoint here otherwise the loop will have the wrong index
+						self.remove_bp = (true, i);
+					}
 				});
 			});
 		});
@@ -159,6 +157,9 @@ impl Breakpoints {
 			self.remove_bp.0 = false;
 		}
 
+	}
+
+	pub fn show_new_breakpoint(&mut self, ctx: &egui::Context, psx: &mut PSXEmulator, new_bp_open: &mut bool) {
 		egui::Window::new("Add Breakpoint").open(new_bp_open).show(ctx, |ui| {
 			ui.horizontal(|ui| {
 				ui.label("Address: ");

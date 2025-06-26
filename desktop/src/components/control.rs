@@ -2,7 +2,7 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::PathBuf;
 
-use eframe::egui::{self, Ui};
+use eframe::egui::Ui;
 use rfd::FileDialog;
 use rcue::parser::parse_from_file;
 
@@ -16,11 +16,6 @@ use crate::components::tty_logger::TTYLogger;
 pub struct Control {
 	pub paused: bool,
 	pub step: bool,
-
-	breakpoints: Breakpoints,
-
-	breakpoints_open: bool,
-	new_breakpoint_open: bool,
 }
 
 impl Control {
@@ -28,15 +23,10 @@ impl Control {
 		Self {
 			paused: true,
 			step: false,
-
-			breakpoints: Breakpoints::new(),
-
-			breakpoints_open: false,
-			new_breakpoint_open: false,
 		}
 	}
 
-	pub fn show(&mut self, ui: &mut Ui, ctx: &egui::Context, psx: &mut PSXEmulator, tty: &mut TTYLogger) {
+	pub fn show(&mut self, ui: &mut Ui, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints) {
 		ui.strong("Control");
 
 		ui.horizontal(|ui| {
@@ -65,17 +55,9 @@ impl Control {
 			}
 
 			if ui.button("Reset").clicked() {
-				self.reset_emu(psx, tty);
+				self.reset_emu(psx, tty, breakpoints);
 			}
 		});
-
-		ui.horizontal(|ui| {
-			if ui.button("Breakpoints").clicked() {
-				self.breakpoints_open = !self.breakpoints_open;
-			}
-		});
-
-		self.breakpoints.show(ctx, psx, &mut self.breakpoints_open, &mut self.new_breakpoint_open);
 
 	}
 
@@ -115,12 +97,12 @@ impl Control {
 		psx.load_disc(disc);
 	}
 
-	pub fn reset_emu(&mut self, psx: &mut PSXEmulator, tty: &mut TTYLogger) {
+	pub fn reset_emu(&mut self, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints) {
 		let bios = fs::read(BIOS_PATH).unwrap();
 		*psx = PSXEmulator::new(bios);
 
 		tty.out_buf.clear();
-		self.breakpoints.breakpoints.clear();
+		breakpoints.breakpoints.clear();
 	}
 
 }

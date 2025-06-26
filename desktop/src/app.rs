@@ -1,29 +1,33 @@
-use eframe::egui::{self, Align2, Key};
+use eframe::egui::{self, CentralPanel, Key};
 use eframe::{App, CreationContext};
+use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex, TabViewer};
 
 use psx::PSXEmulator;
 
+use crate::components::breakpoints::Breakpoints;
 use crate::components::kernel_logger::KernelLogger;
-use crate::components::{control::*, vram::*, tty_logger::*, disassembly::*};
+use crate::components::{control::*, disassembly::*, tty_logger::*, vram::*};
+
+type Tab = String;
 
 pub const BIOS_PATH: &str = "res/SCPH1001.bin";
 
-const BTN_UP: Key		= Key::W;
-const BTN_DOWN: Key		= Key::S;
-const BTN_LEFT: Key 	= Key::A;
-const BTN_RIGHT: Key 	= Key::D;
-const BTN_CROSS: Key	= Key::K;
-const BTN_SQUARE: Key	= Key::J;
-const BTN_TRIANGLE: Key	= Key::I;
-const BTN_CIRCLE: Key	= Key::L;
-const BTN_L1: Key		= Key::Q;
-const BTN_L2: Key		= Key::Num1;
-const BTN_R1: Key		= Key::E;
-const BTN_R2: Key		= Key::Num3;
-const BTN_START: Key	= Key::Enter;
-const BTN_SELECT: Key	= Key::Backslash;
+const BTN_UP: 		Key = Key::W;
+const BTN_DOWN: 	Key = Key::S;
+const BTN_LEFT: 	Key = Key::A;
+const BTN_RIGHT: 	Key = Key::D;
+const BTN_CROSS: 	Key = Key::K;
+const BTN_SQUARE: 	Key = Key::J;
+const BTN_TRIANGLE: Key = Key::I;
+const BTN_CIRCLE: 	Key = Key::L;
+const BTN_L1: 		Key = Key::Q;
+const BTN_L2: 		Key = Key::Num1;
+const BTN_R1: 		Key = Key::E;
+const BTN_R2: 		Key = Key::Num3;
+const BTN_START: 	Key = Key::Enter;
+const BTN_SELECT: 	Key = Key::Backslash;
 
-pub struct Desktop {
+pub struct FrontendState {
 	psx: PSXEmulator,
 
 	control: Control,
@@ -31,13 +35,98 @@ pub struct Desktop {
 	tty_logger: TTYLogger,
 	kernel_logger: KernelLogger,
 	disassembly: Disassembly,
+	breakpoints: Breakpoints,
 
-	control_open: bool,
+	new_breakpoint_open: bool,
+}
+
+pub struct Desktop {
+	context: FrontendState,
+	tree: DockState<Tab>,
 }
 
 impl Desktop {
 	pub fn new(cc: &CreationContext) -> Self {
+		let mut dock_state = DockState::new(vec!["VRAM".to_string()]);
 
+		let surface = dock_state.main_surface_mut();
+
+		let [root_node, left_split] = surface.split_left(NodeIndex::root(), 0.2, vec!["Control".to_string()]);
+		surface.split_below(left_split, 0.2, vec!["Disassembly".to_string()]);
+
+		let [root_node, right_split] = surface.split_right(root_node, 0.725, vec!["TTY Logger".to_string()]);
+		surface.split_below(right_split, 0.5, vec!["Kernel Logger".to_string()]);
+
+		surface.split_below(root_node, 0.7, vec!["Breakpoints".to_string()]);
+
+		Self {
+			context: FrontendState::new(cc),
+			tree: dock_state,
+		}
+	}
+}
+
+impl App for Desktop {
+	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+		self.context.update(ctx);
+
+		egui::TopBottomPanel::top("Menu Bar").show(ctx, |ui| {
+			egui::menu::bar(ui, |ui| {
+				ui.menu_button("View", |ui| {
+					for tab in &["Disassembly", "TTY Logger", "Kernel Logger", "Breakpoints"] {
+						if ui.button(*tab).clicked() {
+							if let Some(index) = self.tree.find_tab(&tab.to_string()) {
+								self.tree.remove_tab(index);
+							} else {
+								self.tree[SurfaceIndex::main()]
+									.push_to_focused_leaf(tab.to_string());
+							}
+						}
+					}
+				});
+			});
+		});
+
+		CentralPanel::default()
+			.frame(egui::Frame::central_panel(&ctx.style()).inner_margin(0.0))
+			.show(ctx, |ui| {
+				DockArea::new(&mut self.tree)
+					.style(Style::from_egui(ctx.style().as_ref()))
+					.show_inside(ui, &mut self.context);
+			});
+		
+		self.context.breakpoints.show_new_breakpoint(ctx, &mut self.context.psx, &mut self.context.new_breakpoint_open);
+	}
+}
+
+impl TabViewer for FrontendState {
+	type Tab = Tab;
+
+	fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+		tab.as_str().into()
+	}
+
+	fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+		match tab.as_str() {
+			"Control" => self.control.show(ui,&mut self.psx, &mut self.tty_logger, &mut self.breakpoints),
+			"Disassembly" => self.disassembly.show(ui, &mut self.psx),
+			"VRAM" => self.vram.show(ui, &self.psx),
+			"TTY Logger" => self.tty_logger.show(ui, &mut self.psx),
+			"Kernel Logger" => self.kernel_logger.show(ui, &mut self.psx.cpu.kernel_log),
+			"Breakpoints" => self.breakpoints.show(ui, &mut self.psx, &mut self.new_breakpoint_open),
+			_ => {
+				ui.label(tab.as_str());
+			}
+		};
+	}
+
+	fn closeable(&mut self, tab: &mut Self::Tab) -> bool {
+		!["Control", "VRAM"].contains(&&tab.as_str())
+	}
+}
+
+impl FrontendState {
+	pub fn new(cc: &CreationContext) -> Self {
 		let bios = std::fs::read(BIOS_PATH).unwrap();
 
 		#[allow(unused_mut)]
@@ -50,19 +139,17 @@ impl Desktop {
 			tty_logger: TTYLogger::new(),
 			kernel_logger: KernelLogger::new(),
 			disassembly: Disassembly::new(),
+			breakpoints: Breakpoints::new(),
 
-			control_open: true,
+			new_breakpoint_open: false,
 		}
 	}
 
 	fn is_keyboard_input_down(&mut self, key: Key, ctx: &egui::Context) -> bool {
-		ctx.input(|input| {
-			input.key_down(key)
-		})
+		ctx.input(|input| input.key_down(key))
 	}
 
 	fn handle_input(&mut self, ctx: &egui::Context) {
-		
 		let up = self.is_keyboard_input_down(BTN_UP, ctx);
 		let down = self.is_keyboard_input_down(BTN_DOWN, ctx);
 		let left = self.is_keyboard_input_down(BTN_LEFT, ctx);
@@ -77,18 +164,16 @@ impl Desktop {
 		let r2 = self.is_keyboard_input_down(BTN_R2, ctx);
 		let start = self.is_keyboard_input_down(BTN_START, ctx);
 		let select = self.is_keyboard_input_down(BTN_SELECT, ctx);
-		
-		self.psx.update_input(up, down, left, right, cross, square, triangle, circle, l1, l2, r1, r2, start, select);
+
+		self.psx.update_input(
+			up, down, left, right, cross, square, triangle, circle, l1, l2, r1, r2, start, select,
+		);
 	}
 
-}
-
-impl App for Desktop {
-	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-
+	fn update(&mut self, ctx: &egui::Context) {
 		self.handle_input(ctx);
 
-		if !self.control.paused && !self.psx.breakpoint_hit {			
+		if !self.control.paused && !self.psx.breakpoint_hit {
 			self.psx.run_frame();
 
 			if self.psx.breakpoint_hit {
@@ -100,33 +185,5 @@ impl App for Desktop {
 			self.psx.tick();
 			self.control.step = false;
 		}
-		
-		if self.control_open {
-			egui::Window::new("CPU").show(ctx, |ui| {
-				self.control.show(ui, ctx, &mut self.psx, &mut self.tty_logger);
-
-				ui.separator();
-
-				self.disassembly.show(ui, &mut self.psx);
-			});
-		}
-
-		egui::Window::new("VRAM Viewer").show(ctx, |ui| {
-			self.vram.show(ui, &self.psx);
-		});
-
-		egui::Window::new("Kernel Log").default_open(false).show(ctx, |ui| {
-			self.kernel_logger.show(ui, &mut self.psx.cpu.kernel_log);
-		});
-
-		egui::Window::new("TTY Output").pivot(Align2::LEFT_TOP).show(ctx, |ui| {
-			egui::ScrollArea::vertical()
-				.stick_to_bottom(true)
-				.show(ui, |ui| {
-					self.tty_logger.show(ui, &mut self.psx);
-				});
-		});
-
-		ctx.request_repaint();
 	}
 }
