@@ -1,3 +1,4 @@
+#![allow(unused)]
 use log::*;
 
 use crate::{bus::Bus, scheduler::Scheduler};

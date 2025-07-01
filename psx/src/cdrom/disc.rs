@@ -72,7 +72,7 @@ impl Display for CdIndex {
 }
 
 pub struct Disc {
-	tracks: Vec<Vec<u8>>
+	pub tracks: Vec<Vec<u8>>
 }
 
 impl Disc {

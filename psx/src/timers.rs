@@ -182,7 +182,7 @@ impl Timer {
 		if let Some(event) = overflow_ev {
 			let cycles_away = scheduler.event_cycles_away(event);
 			let counter = 0xFFFF - ((cycles_away as f32) / (self.overflow_cycles_away as f32) * 0xFFFF as f32) as u16;
-			trace!("read Timer{} src: {:?} counter 0x{:X} (0xFFFF - (0x{cycles_away:X} / 0x{:X}) * 0xFFFF", self.timer_num, self.clock_src, counter, self.overflow_cycles_away);
+			trace!("read Timer{} src: {:?} counter 0x{counter:X} (0xFFFF - ((0x{cycles_away:X} / 0x{:X}) * 0xFFFF)", self.timer_num, self.clock_src, self.overflow_cycles_away);
 
 			return counter as u32;
 		} else {
@@ -248,7 +248,7 @@ impl Timer {
 		trace!("clock src: {:?}", self.clock_src);
 
 		if self.use_sync_mode {
-			error!("using sync mode for Timer{}", self.timer_num);
+			error!("using sync mode for Timer{} (mode: {})", self.timer_num, self.sync_mode);
 		}
 
 		self.reschedule_events(scheduler);

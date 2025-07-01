@@ -2,13 +2,6 @@
 use std::cmp;
 use log::*;
 
-/* const DITHERING_TABLE: [[i8; 4]; 4] = [
-	[-4,  0,  -3,  1],
-	[2,  -2,  3,  -1],
-	[-3,  1,  -4,  0],
-	[3,  -1,  2,  -2],
-]; */
-
 const DITHERING_TABLE: &[[i8; 4]; 4] = &[[-4, 0, -3, 1], [2, -2, 3, -1], [-3, 1, -4, 0], [3, -1, 2, -2]];
 
 #[derive(Debug, Clone, Copy)]
@@ -18,6 +11,7 @@ enum DrawCommand {
 	VramVramDma,
 	DrawRect(RectCmdParams),
 	DrawPolygon(PolygonCmdParams),
+	DrawLine(LineCmdParams),
 	QuickFill(u32)
 }
 
@@ -64,6 +58,7 @@ impl RectSize {
 enum GP0State {
 	WaitingForNextCmd,
 	WaitingForParams { command: DrawCommand, index: u8, words_left: u8 },
+	WaitingForPolyline(LineCmdParams),
 	RecvData(VramDmaInfo),
 	SendData(VramDmaInfo),
 }
@@ -93,6 +88,14 @@ struct RectCmdParams {
 	position: Vertex,
 	clut: Vertex,
 	size: Vertex,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LineCmdParams {
+	shaded: bool,			// 1: gouraud / 0: flat
+	polyline: bool,			// 1: polyline / 0: single line
+	semi_transparent: bool,
+	colour: Colour,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -195,7 +198,7 @@ pub struct Gpu {
 	pub vram: Box<[u16]>,
 
 	gp0_state: GP0State,
-	gp0_params: [u32; 16],
+	gp0_params: Vec<u32>,
 
 	gp1_state: GP1State,
 	gp1_params: [u32; 16],
@@ -217,7 +220,7 @@ impl Gpu {
 			vram: vec![0; 512 * 1024].into_boxed_slice().try_into().unwrap(),
 
 			gp0_state: GP0State::WaitingForNextCmd,
-			gp0_params: [0; 16],
+			gp0_params: vec![0; 16],
 
 			gp1_state: GP1State::WaitingForNextCmd,
 			gp1_params: [0; 16],
@@ -289,6 +292,7 @@ impl Gpu {
 					_ => todo!("Misc cmd 0x{word:X}")
 				}
 
+				// draw polygon
 				1 => {
 					let gouraud_shading = (word >> 28) & 1 != 0;
 					let vertices = if (word >> 27) & 1 != 0 { 4 } else { 3 };
@@ -311,7 +315,27 @@ impl Gpu {
 
 					GP0State::WaitingForParams { command: DrawCommand::DrawPolygon(params), index: 0, words_left: words_left }
 				},
-				2 => todo!("draw line"),
+				// draw line
+				2 => {
+					let params = LineCmdParams {
+						shaded: (word >> 28) & 1 != 0,
+						polyline: (word >> 27) & 1 != 0,
+						semi_transparent: (word >> 25) & 1 != 0,
+						colour: Colour::from_packet(word),
+					};
+
+					let words_left = 2 + u8::from(params.shaded);
+
+					trace!("start line words left {words_left} shaded: {} polyline: {}", params.shaded, params.polyline);
+
+					if params.polyline {
+						self.gp0_params.clear();
+						GP0State::WaitingForPolyline(params)
+					} else {
+						GP0State::WaitingForParams { command: DrawCommand::DrawLine(params), index: 0, words_left: words_left }
+					}
+				},
+				// draw rect
 				3 => {
 					let rect_size = RectSize::from_bits((word >> 27) & 3);
 					let textured = (word >> 26) & 1 != 0;
@@ -392,6 +416,10 @@ impl Gpu {
 
 			GP0State::WaitingForParams { command, index, words_left } => {
 
+				if index == 0 {
+					self.gp0_params = vec![0; 16];
+				}
+
 				self.gp0_params[index as usize] = word;
 				trace!("(write 0x{word:X}) words left {}", words_left - 1);
 
@@ -400,6 +428,18 @@ impl Gpu {
 				} else {
 					GP0State::WaitingForParams { command: command, index: index + 1, words_left: words_left - 1 }
 				}
+			},
+			GP0State::WaitingForPolyline(params) => {
+				self.gp0_params.push(word);
+
+				if word & 0xF000F000 == 0x50005000 {
+					// exec polyline
+					self.draw_polyline(params);
+					GP0State::WaitingForNextCmd
+				} else {
+					GP0State::WaitingForPolyline(params)
+				}
+				
 			}
 
 			GP0State::RecvData(vram_dma_info) => self.process_cpu_vram_dma(word, vram_dma_info),
@@ -443,6 +483,24 @@ impl Gpu {
 
 				GP0State::WaitingForNextCmd
 			},
+			DrawCommand::DrawLine(cmd) => {
+				trace!("draw line (polyline: {})", cmd.polyline);
+
+				let mut v0 = Vertex::from_packet(self.gp0_params[0]);
+				let mut v1 = Vertex::from_packet(self.gp0_params[1 + usize::from(cmd.shaded)]);
+
+				if cmd.shaded {
+					v0.colour = cmd.colour;
+					v1.colour = Colour::from_packet(self.gp0_params[1]);
+				} else {
+					v0.colour = cmd.colour;
+					v1.colour = cmd.colour;
+				}
+
+				self.draw_line(v0, v1);
+
+				GP0State::WaitingForNextCmd
+			}
 			DrawCommand::DrawPolygon(cmd) => {
 				trace!("draw polygon");
 				self.draw_polygon(cmd);
@@ -553,24 +611,122 @@ impl Gpu {
 		let dest_x = (self.gp0_params[1] & 0x3FF) as u16;
 		let dest_y = ((self.gp0_params[1] >> 16) & 0x1FF) as u16;
 
-		let mut width = (self.gp0_params[2] & 0x3FF) as u16;
+		let mut width = ((self.gp0_params[2].wrapping_sub(1) & 0x3FF) + 1) as u16;
 		if width == 0 {
 			width = 1024;
 		}
 
-		let mut height = ((self.gp0_params[2] >> 16) & 0x1FF) as u16;
+		let mut height = (((self.gp0_params[2].wrapping_sub(1) >> 16) & 0x1FF) + 1) as u16;
 		if height == 0 {
 			height = 512;
 		}
 
+		trace!("[VRAM-VRAM DMA] src: (0x{src_x:X}, 0x{src_y:X}) dest: (0x{dest_x:X}, 0x{dest_y:X}) size: ({width}, {height})");
+
 		for y_offset in 0..height {
 			for x_offset in 0..width {
-				let src_addr = coord_to_vram_index((src_x + x_offset) as u32, (src_y + y_offset) as u32) as usize;
+				let src_addr = coord_to_vram_index(((src_x + x_offset) & 0x3FF) as u32, ((src_y + y_offset) & 0x1FF) as u32) as usize;
 
 				let src = self.vram[src_addr];
-				self.draw_pixel_15bit(src, (dest_x + x_offset) as u32, (dest_y + y_offset) as u32);
+				//trace!("[VRAM-VRAM DMA] draw pixel 0x{src:X} at ({}, {})", (dest_x + x_offset) as u32, (dest_y + y_offset) as u32);
+				self.draw_pixel_15bit(src, ((dest_x + x_offset) & 0x3FF) as u32, ((dest_y + y_offset) & 0x1FF) as u32);
 			}
 		}
+	}
+	
+	fn draw_polyline(&mut self, params: LineCmdParams) {
+		if params.shaded {
+			let verts: Vec<Vertex> = self.gp0_params
+				.chunks_exact(2)
+				.map(|chunk| {
+					let mut vertex = Vertex::from_packet(chunk[0]);
+					vertex.colour = Colour::from_packet(chunk[1]);
+
+					vertex
+				})
+				.collect();
+
+			verts
+				.windows(2)
+				.map(|v| (&v[0], &v[1]))
+				.for_each(|(v0, v1)| self.draw_line(*v0, *v1));
+		} else {
+			let verts: Vec<Vertex> = self.gp0_params.drain(..).map(|v| {
+				let mut vertex = Vertex::from_packet(v);
+				vertex.colour = params.colour;
+
+				vertex
+			})
+			.collect();
+
+			verts
+				.windows(2)
+				.map(|v| (&v[0], &v[1]))
+				.for_each(|(v0, v1)| self.draw_line(*v0, *v1));
+		}
+	}
+
+	fn draw_line(&mut self, v0: Vertex, v1: Vertex) {
+		if !vertices_valid(v0, v1) {
+			return;
+		}
+
+		let dx = v1.x - v0.x;
+		let dy = v1.y - v0.y;
+
+		let diff_r = i32::from(v1.colour.r) - i32::from(v0.colour.r);
+		let diff_g = i32::from(v1.colour.g) - i32::from(v0.colour.g);
+		let diff_b = i32::from(v1.colour.b) - i32::from(v0.colour.b);
+
+		let (x_step, y_step, r_step, g_step, b_step) = if dx.abs() >= dy.abs() {
+			let y_step = f64::from(dy) / f64::from(dx.abs());
+			
+			let r_step = f64::from(diff_r) / f64::from(dx.abs());
+			let g_step = f64::from(diff_g) / f64::from(dx.abs());
+			let b_step = f64::from(diff_b) / f64::from(dx.abs());
+
+			(f64::from(dx.signum()), y_step, r_step, g_step, b_step)
+		} else {
+			let x_step = f64::from(dx) / f64::from(dy.abs());
+			
+			let r_step = f64::from(diff_r) / f64::from(dy.abs());
+			let g_step = f64::from(diff_g) / f64::from(dy.abs());
+			let b_step = f64::from(diff_b) / f64::from(dy.abs());
+
+			(x_step, f64::from(dy.signum()), r_step, g_step, b_step)
+		};
+
+		let mut r = f64::from(v0.colour.r);
+		let mut g = f64::from(v0.colour.g);
+		let mut b = f64::from(v0.colour.b);
+
+		let mut x = f64::from(v0.x);
+		let mut y = f64::from(v0.y);
+
+		while x.round() as i32 != v1.x || y.round() as i32 != v1.y {
+			let vertex = Vertex::new(x.round() as i32, y.round() as i32);
+			let mut colour = Colour::from_rgb888(r as u8, g as u8, b as u8);
+
+			// ensure pixel is within the drawing area
+			if (self.draw_area_top_left.x..=self.draw_area_bottom_right.x).contains(&vertex.x)
+            	&& (self.draw_area_top_left.y..=self.draw_area_bottom_right.y).contains(&vertex.y) {
+
+				if self.tex_page.dithering {
+					colour = apply_dithering(colour, vertex)
+				}
+
+				self.draw_pixel_15bit(colour.truncate_to_15bit(), vertex.x as u32, vertex.y as u32);
+
+			}
+
+			r += r_step;
+			g += g_step;
+			b += b_step;
+
+			x += x_step;
+			y += y_step;
+		}
+
 	}
 
 	fn draw_rect(&mut self, mut cmd: RectCmdParams) {
@@ -613,7 +769,13 @@ impl Gpu {
 			for x in min_x..=max_x {
 
 				let draw_colour = if cmd.textured {
-					self.sample_texture(Vertex::new(cmd.position.tex_x + (x - min_x), cmd.position.tex_y + (y - min_y)), cmd.clut)
+					let colour = self.sample_texture(Vertex::new(cmd.position.tex_x + (x - min_x), cmd.position.tex_y + (y - min_y)), cmd.clut);
+
+					if colour == 0 {
+						continue;
+					}
+
+					colour
 				} else {
 					u16::from(cmd.colour.r) | (u16::from(cmd.colour.g) << 5) | (u16::from(cmd.colour.b) << 10)
 				};
@@ -719,6 +881,10 @@ impl Gpu {
 		max_y = cmp::min(max_y, self.draw_area_bottom_right.y);
 
 		if min_x > max_x || min_y > max_y {
+			return;
+		}
+
+		if !vertices_valid(v0, v1) || !vertices_valid(v1, v2) || !vertices_valid(v2, v0) {
 			return;
 		}
 
@@ -907,4 +1073,8 @@ fn apply_dithering(colour: Colour, p: Vertex) -> Colour {
         g: colour.g.saturating_add_signed(offset),
         b: colour.b.saturating_add_signed(offset),
     }
+}
+
+fn vertices_valid(v0: Vertex, v1: Vertex) -> bool {
+	(v0.x - v1.x).abs() < 1024 && (v0.y - v1.y).abs() < 512
 }

@@ -73,7 +73,15 @@ impl DriveSpeed {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DriveState {
+	Read = 0x20,
+	Seek = 0x40,
+	Play = 0x80,
+	Idle = 0x00,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum SectorSize {
 	DataOnly,
 	WholeSector
@@ -135,10 +143,12 @@ pub struct Cdrom {
 
 	read_offset: CdIndex,
 	read_paused: bool,
-	reading: bool,
 
 	drive_speed: DriveSpeed,
+	drive_state: DriveState,
 	sector_size: SectorSize,
+	last_sector_size: SectorSize,
+	ignore_cur_sector_size: bool,
 	motor_on: bool,
 }
 
@@ -160,10 +170,12 @@ impl Cdrom {
 
 			read_offset: CdIndex::ZERO,
 			read_paused: false,
-			reading: false,
 
 			drive_speed: DriveSpeed::SingleSpeed,
+			drive_state: DriveState::Idle,
 			sector_size: SectorSize::DataOnly,
+			last_sector_size: SectorSize::DataOnly,
+			ignore_cur_sector_size: false,
 			motor_on: true,
 		}
 	}
@@ -190,7 +202,7 @@ impl Cdrom {
 			// RDDATA
 			2 => {
 				let data = self.data_fifio.pop_front().or(Some(0)).unwrap();
-				trace!("read data fifo: 0x{data:X}");
+				//trace!("read data fifo: 0x{data:X}");
 
 				data
 			},
@@ -268,8 +280,12 @@ impl Cdrom {
 			0x1 => self.nop(),
 			// Setloc
 			0x2 => self.set_loc(),
+			// Play
+			0x3 => self.play(),
 			// ReadN
 			0x6 => self.read_n(),
+			// Stop
+			0x8 => self.stop(),
 			// Pause
 			0x9 => self.pause(),
 			// Init
@@ -278,12 +294,19 @@ impl Cdrom {
 			0xC => (CmdResponse::int3_status(&self), AVG_CYCLES),
 			// Setmode
 			0xE => self.set_mode(),
+			// GetTN
+			0x13 => self.get_tn(),
+			// GetTD
+			0x14 => self.get_td(),
 			// SeekL
 			0x15 => self.seek_l(),
+			// SeekP
+			0x16 => self.seek_p(),
 			// Test
 			0x19 => self.test(),
 			// GetID
 			0x1A => self.get_id(),
+
 			_ => todo!("cmd 0x{cmd:X}")
 		};
 
@@ -296,7 +319,7 @@ impl Cdrom {
 	pub fn get_stat(&self) -> u8 {
 		let result = (u8::from(self.motor_on) << 1) // motor state
 			| (u8::from(self.disc.is_none()) << 4)		// shell open
-			| (u8::from(self.reading) << 5);			// reading data sectors
+			| (self.drive_state as u8);					// reading data sectors
 		
 		//trace!("getstat: 0b{result:b}");
 

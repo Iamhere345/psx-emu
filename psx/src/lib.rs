@@ -11,6 +11,7 @@ mod interrupts;
 mod timers;
 mod sio0;
 mod kernel;
+mod spu;
 mod scheduler;
 pub mod bus;
 

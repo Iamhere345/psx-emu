@@ -65,6 +65,36 @@ impl Cdrom {
 		(first_response, AVG_CYCLES)
 	}
 
+	pub fn get_tn(&self) -> (CmdResponse, u64) {
+		let (first, last) = match &self.disc {
+			Some(disc) => (1u8, disc.tracks.len() as u8),
+			None => (1, 1)
+		};
+
+		debug!("GetTN ({first}, {last})");
+
+		(CmdResponse {
+			int_level: 3,
+			result: vec![self.get_stat(), first, last],
+			second_response: None,
+			on_complete: None
+		}, AVG_CYCLES)
+	}
+
+	// TODO
+	pub fn get_td(&self) -> (CmdResponse, u64) {
+		if self.params_fifo.len() < 1 {
+			return (CmdResponse::error(&self, ERROR_INVALID_PARAMS), AVG_CYCLES);
+		}
+
+		(CmdResponse {
+			int_level: 3,
+			result: vec![self.get_stat(), 0, 2],
+			second_response: None,
+			on_complete: None
+		}, AVG_CYCLES)
+	}
+
 	pub fn set_loc(&mut self) -> (CmdResponse, u64) {
 		if self.params_fifo.len() < 3 {
 			return (CmdResponse::error(&self, ERROR_INVALID_PARAMS), AVG_CYCLES);
@@ -101,6 +131,24 @@ impl Cdrom {
 		(first_response, AVG_CYCLES)
 	}
 
+	// TODO just a copy of SeekL for now
+	pub fn seek_p(&mut self) -> (CmdResponse, u64) {
+		debug!("SeekP");
+
+		let mut first_response = CmdResponse::int3_status(&self);
+
+		let second_response = CmdResponse {
+			int_level: 2,
+			result: vec![self.get_stat()],
+			second_response: None,
+			on_complete: Some(Self::seek_l_complete),
+		};
+
+		first_response.second_response = Some((Box::new(second_response), 0x10000));
+
+		(first_response, AVG_CYCLES)
+	}
+
 	pub fn seek_l_complete(&mut self) -> Option<(CmdResponse, u64)> {
 		//trace!("SeekL complete");
 		self.current_seek = self.seek_target;
@@ -114,11 +162,14 @@ impl Cdrom {
 			return (CmdResponse::error(&self, ERROR_INVALID_PARAMS), AVG_CYCLES);
 		}
 
+		self.last_sector_size = self.sector_size;
+
 		let new_mode = self.params_fifo.pop_front().unwrap();
 		self.drive_speed = DriveSpeed::from_bits((new_mode >> 7) & 1 != 0);
 		self.sector_size = SectorSize::from_bits((new_mode >> 5) & 1 != 0);
+		self.ignore_cur_sector_size = (new_mode >> 4) & 1 != 0;
 
-		debug!("SetMode 0b{new_mode:b} {:?} {:?}", self.drive_speed, self.sector_size);
+		debug!("SetMode 0b{new_mode:b} {:?} {:?} ignore bit: {}", self.drive_speed, self.sector_size, self.ignore_cur_sector_size);
 
 		(CmdResponse::int3_status(self), AVG_CYCLES)
 	}
@@ -130,7 +181,7 @@ impl Cdrom {
 
 		self.read_offset = CdIndex::ZERO;
 		self.read_paused = false;
-		self.reading = true;
+		self.drive_state = DriveState::Read;
 		
 		self.data_fifio.clear();
 
@@ -155,16 +206,16 @@ impl Cdrom {
 	}
 
 	pub fn read_n_complete(&mut self) -> Option<(CmdResponse, u64)> {
-		if self.read_paused || !self.reading {
+		if self.read_paused || !(self.drive_state == DriveState::Read) {
 			return None;
 		}
 
 		if let Some(disc) = &self.disc {
-			trace!("ReadN sector {} ({} + {}) {} {}", (self.current_seek + self.read_offset), self.current_seek, self.read_offset, self.read_paused, self.reading);
+			trace!("ReadN sector {} ({} + {}) {} {:?}", (self.current_seek + self.read_offset), self.current_seek, self.read_offset, self.read_paused, self.drive_state);
 
 			let sector = disc.read_sector(self.current_seek + self.read_offset);
 
-			let data = match self.sector_size {
+			let data = match if !self.ignore_cur_sector_size { self.sector_size } else { self.last_sector_size } {
 				SectorSize::DataOnly => sector.data_only(),
 				SectorSize::WholeSector => sector.whole_sector()
 			};
@@ -203,10 +254,24 @@ impl Cdrom {
 		};
 
 		self.read_paused = true;
-		self.reading = false;
+		self.drive_state = DriveState::Idle;
 
 		first_response.second_response = Some((Box::new(second_response), second_response_cycles));
 		(first_response, AVG_CYCLES)
+	}
+
+	// TODO
+	pub fn play(&mut self) -> (CmdResponse, u64) {
+		self.drive_state = DriveState::Play;
+
+		(CmdResponse::int3_status(self), AVG_CYCLES)
+	}
+
+	// TODO
+	pub fn stop(&mut self) -> (CmdResponse, u64) {
+		self.drive_state = DriveState::Idle;
+
+		(CmdResponse::int3_status(self), AVG_CYCLES)
 	}
 
 	pub fn init(&mut self) -> (CmdResponse, u64) {

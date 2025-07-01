@@ -85,7 +85,8 @@ impl Scheduler {
 	}
 
 	pub fn event_cycles_away(&self, event: &SchedulerEvent) -> u64 {
-		self.cpu_cycle_counter.saturating_sub(event.cpu_timestamp)
+		//trace!("counter: {} - timestamp: {} = {}", self.cpu_cycle_counter, event.cpu_timestamp, self.cpu_cycle_counter.saturating_sub(event.cpu_timestamp));
+		event.cpu_timestamp.saturating_sub(self.cpu_cycle_counter)
 	}
 
 	pub fn next_event_ready(&self) -> bool {
