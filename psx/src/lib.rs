@@ -140,6 +140,26 @@ impl PSXEmulator {
 		ctx.btn_select = select;
 	}
 
+	pub fn get_display_res(&self) -> (usize, usize) {
+		self.bus.gpu.get_display_res()
+	}
+
+	pub fn get_display_start(&self) -> (usize, usize) {
+		self.bus.gpu.get_display_start()
+	}
+
+	pub fn get_vram(&self) -> &Box<[u16]> {
+		&self.out_vram
+	}
+
+	pub fn get_tty_buf(&mut self) -> String {
+		let old_buf = self.cpu.tty_buf.clone();
+
+		self.cpu.tty_buf = String::new();
+
+		old_buf
+	}
+
 	// from https://jsgroth.dev/blog/posts/ps1-sideloading/
 	pub fn sideload_exe(&mut self, exe: Vec<u8>) {
 
@@ -171,15 +191,4 @@ impl PSXEmulator {
 
 	}
 
-	pub fn get_vram(&self) -> &Box<[u16]> {
-		&self.out_vram
-	}
-
-	pub fn get_tty_buf(&mut self) -> String {
-		let old_buf = self.cpu.tty_buf.clone();
-
-		self.cpu.tty_buf = String::new();
-
-		old_buf
-	}
 }

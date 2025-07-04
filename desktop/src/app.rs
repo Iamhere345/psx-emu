@@ -6,7 +6,7 @@ use psx::PSXEmulator;
 
 use crate::components::breakpoints::Breakpoints;
 use crate::components::kernel_logger::KernelLogger;
-use crate::components::{control::*, disassembly::*, tty_logger::*, vram::*};
+use crate::components::{control::*, disassembly::*, tty_logger::*, display::*};
 
 type Tab = String;
 
@@ -32,6 +32,7 @@ pub struct FrontendState {
 
 	control: Control,
 	vram: VramViewer,
+	display: DisplayViwer,
 	tty_logger: TTYLogger,
 	kernel_logger: KernelLogger,
 	disassembly: Disassembly,
@@ -47,7 +48,7 @@ pub struct Desktop {
 
 impl Desktop {
 	pub fn new(cc: &CreationContext) -> Self {
-		let mut dock_state = DockState::new(vec!["VRAM".to_string()]);
+		let mut dock_state = DockState::new(vec!["Display".to_string(), "VRAM".to_string()]);
 
 		let surface = dock_state.main_surface_mut();
 
@@ -96,6 +97,8 @@ impl App for Desktop {
 			});
 		
 		self.context.breakpoints.show_new_breakpoint(ctx, &mut self.context.psx, &mut self.context.new_breakpoint_open);
+
+		ctx.request_repaint();
 	}
 }
 
@@ -111,6 +114,7 @@ impl TabViewer for FrontendState {
 			"Control" => self.control.show(ui,&mut self.psx, &mut self.tty_logger, &mut self.breakpoints),
 			"Disassembly" => self.disassembly.show(ui, &mut self.psx),
 			"VRAM" => self.vram.show(ui, &self.psx),
+			"Display" => self.display.show(ui, &self.psx),
 			"TTY Logger" => self.tty_logger.show(ui, &mut self.psx),
 			"Kernel Logger" => self.kernel_logger.show(ui, &mut self.psx.cpu.kernel_log),
 			"Breakpoints" => self.breakpoints.show(ui, &mut self.psx, &mut self.new_breakpoint_open),
@@ -121,7 +125,7 @@ impl TabViewer for FrontendState {
 	}
 
 	fn closeable(&mut self, tab: &mut Self::Tab) -> bool {
-		!["Control", "VRAM"].contains(&&tab.as_str())
+		!["Control", "VRAM", "Display"].contains(&&tab.as_str())
 	}
 }
 
@@ -136,6 +140,7 @@ impl FrontendState {
 
 			control: Control::new(),
 			vram: VramViewer::new(cc),
+			display: DisplayViwer::new(cc),
 			tty_logger: TTYLogger::new(),
 			kernel_logger: KernelLogger::new(),
 			disassembly: Disassembly::new(),

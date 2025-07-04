@@ -7,9 +7,9 @@ const BYTES_PER_SECTOR: usize = 0x930;
 
 #[derive(Clone, Copy, Debug)]
 pub struct CdIndex {
-	minutes: u8,
-	seconds: u8,
-	sectors: u8,
+	pub minutes: u8,
+	pub seconds: u8,
+	pub sectors: u8,
 }
 
 impl CdIndex {
@@ -95,7 +95,7 @@ impl Disc {
 
 	}
 
-	fn get_track_number(&self, sector_addr: usize) -> (usize, usize) {
+	pub fn get_track_number(&self, sector_addr: usize) -> (usize, usize) {
 		let mut track_addr = 0;
 		for (track_num, track) in self.tracks.iter().enumerate() {
 			if sector_addr >= track_addr && sector_addr < track_addr + track.len() {
@@ -120,12 +120,12 @@ impl Sector {
 		}
 	}
 
-	pub fn whole_sector(&self) -> Vec<u8> {
-		self.data[0xC..].to_vec()
+	pub fn whole_sector(&self) -> &[u8] {
+		&self.data[0xC..]
 	}
 
-	pub fn data_only(&self) -> Vec<u8> {
-		self.data[0x18..0x18 + 0x800].to_vec()
+	pub fn data_only(&self) -> &[u8] {
+		&self.data[0x18..0x18 + 0x800]
 	}
 }
 

@@ -76,6 +76,7 @@ impl Timers {
 		let timer = &mut self.timers[timer_num as usize];
 
 		if timer.irq_at_overflow && timer.irq {
+			trace!("Timer{timer_num} IRQ raised at overflow");
 			// false=irq fired
 			timer.irq = false;
 			interrupts.raise_interrupt(timer.irq_src());
@@ -94,10 +95,15 @@ impl Timers {
 	pub fn target_event(&mut self, timer_num: u8, scheduler: &mut Scheduler, interrupts: &mut Interrupts) {
 		let timer = &mut self.timers[timer_num as usize];
 
-		if timer.irq_at_target && timer.irq {
+		//if timer.irq_at_target && timer.irq {
+		// TODO irq toggle/pulse
+		if timer.irq_at_target {
+			trace!("Timer{timer_num} IRQ raised at target");
 			// false=irq fired
 			timer.irq = false;
 			interrupts.raise_interrupt(timer.irq_src());
+		} else {
+			trace!("Timer{timer_num} no IRQ as {} && {} != true", timer.irq_at_target, timer.irq);
 		}
 
 		timer.reached_target = true;
@@ -119,7 +125,8 @@ impl Timers {
 			timer.target
 		};
 
-		trace!("Timer{timer_num} target 0x{:X} reset mode: {:?} (0xFFFF - 0x{:X} + 0x{:X})", timer.convert_cycles(cycles), timer.reset_after, timer.counter, timer.target);
+		trace!("Timer{timer_num} target 0x{:X} reset mode: {:?} ovflw irq: {} tgt irq: {} (0xFFFF - 0x{:X} + 0x{:X})", timer.convert_cycles(cycles), timer.reset_after, timer.irq_at_overflow, timer.irq_at_target, timer.counter, timer.target);
+		trace!("Timer{timer_num} ovflw irq: {} tgt irq: {} repeat: {} pulse: {}", timer.irq_at_overflow, timer.irq_at_target, timer.irq_repeat, timer.irq_pulse);
 
 		let target_cycles = timer.convert_cycles(cycles);
 		scheduler.schedule_event(SchedulerEvent::new(EventType::TimerTarget(timer_num)), target_cycles);

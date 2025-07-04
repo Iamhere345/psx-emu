@@ -112,6 +112,8 @@ impl Channel {
 				if self.block_amount == 0 {
 					self.block_amount = 0x10000;
 				}
+
+				trace!("[DMA{}] block size: 0x{:X} block amount: 0x{:X}", self.channel_num, self.block_size, self.block_amount);
 			},
 			// channel control register
 			2 => {				
@@ -307,6 +309,23 @@ impl DmaController {
 		}
 	}
 
+	pub fn read8(&self, addr: u32) -> u8 {
+		match addr & 0xFF {
+			// DPCR
+			0xF0 => (self.control.read() >> 0) as u8,
+			0xF1 => (self.control.read() >> 8) as u8,
+			0xF2 => (self.control.read() >> 16) as u8,
+			0xF3 => (self.control.read() >> 24) as u8,
+			// DICR
+			0xF4 => (self.irq.read() >> 0) as u8,
+			0xF5 => (self.irq.read() >> 8) as u8,
+			0xF6 => (self.irq.read() >> 16) as u8,
+			0xF7 => (self.irq.read() >> 24) as u8,
+
+			_ => unreachable!("[0x{addr:X}] DMA read8")
+		}
+	}
+
 	pub fn read32(&self, addr: u32) -> u32 {
 		let channel = (addr >> 0x4) & 0x7;
 
@@ -314,9 +333,6 @@ impl DmaController {
 		match addr {
 			// channel registers
 			0x1F801080	..= 0x1F8010EF => {
-				if channel == 4 {
-					error!("[0x{addr:X}] DMA{channel} read32");
-				}
 				trace!("[0x{addr:X}] DMA{channel} read32");
 				self.channels[channel as usize].read32(addr)
 			},
@@ -360,6 +376,23 @@ impl DmaController {
 
 			_ => unreachable!()
 		}
+	}
+
+	pub fn write8(&mut self, addr: u32, write: u8) {
+		match addr & 0xFF {
+			// DPCR
+			0xF0 => self.control.write(u32::from(write) << 00),
+			0xF1 => self.control.write(u32::from(write) << 08),
+			0xF2 => self.control.write(u32::from(write) << 16),
+			0xF3 => self.control.write(u32::from(write) << 24),
+			// DICR
+			0xF4 => self.irq.write(u32::from(write) << 00),
+			0xF5 => self.irq.write(u32::from(write) << 08),
+			0xF6 => self.irq.write(u32::from(write) << 16),
+			0xF7 => self.irq.write(u32::from(write) << 24),
+
+			_ => unreachable!("[0x{addr:X}] DMA read8")
+		};
 	}
 
 	pub fn raise_int(&mut self, flag: u8, interrupts: &mut Interrupts) {
@@ -509,7 +542,10 @@ impl Bus {
 						},
 						CHANNEL_SPU => {
 							// stubbed
-						}
+						},
+						CHANNEL_MDECIN => {
+							// stubbed
+						},
 						_ => todo!("FromRam DMA{channel_num}")
 					}
 				},
@@ -531,7 +567,11 @@ impl Bus {
 							}
 
 							u32::from_le_bytes(data)
-						}
+						},
+						CHANNEL_MDECOUT => {
+							// stubbed
+							0xFF
+						},
 						_ => todo!("ToRam DMA{channel_num} mode {:?}", channel.sync_mode),
 					};
 					

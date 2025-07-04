@@ -15,12 +15,12 @@ enum DrawCommand {
 	QuickFill(u32)
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 enum TexBitDepth {
 	#[default]
-	FourBit,
-	EightBit,
-	FiveteenBit,
+	FourBit = 0,
+	EightBit = 1,
+	FiveteenBit = 2,
 }
 
 impl TexBitDepth {
@@ -65,6 +65,93 @@ enum GP0State {
 
 enum GP1State {
 	WaitingForNextCmd,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HorizontalRes {
+	H256 = 0,
+	H320 = 1,
+	H512 = 2,
+	H640 = 3,
+}
+
+impl HorizontalRes {
+	fn from_bits(bits: u32) -> Self {
+		match bits {
+			0 => Self::H256,
+			1 => Self::H320,
+			2 => Self::H512,
+			3 => Self::H640,
+
+			_ => unreachable!()
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+enum VerticalRes {
+	V240 = 0,
+	V480 = 1,
+}
+
+impl VerticalRes {
+	fn from_bit(bit: bool) -> Self {
+		match bit {
+			true => Self::V480,
+			false => Self::V240,
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+enum VideoMode {
+	Ntsc = 0,
+	Pal = 1,
+}
+
+impl VideoMode {
+	fn from_bit(bit: bool) -> Self {
+		match bit {
+			true => Self::Pal,
+			false => Self::Ntsc,
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ColourDepth {
+	FiveteenBit = 0,
+	TwentyFourBit = 1,
+}
+
+impl ColourDepth {
+	fn from_bit(bit: bool) -> Self {
+		match bit {
+			true => Self::TwentyFourBit,
+			false => Self::FiveteenBit,
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DmaDirection {
+	Off = 0,
+	Fifo = 1,
+	CpuToGp0 = 2,
+	GpureadToCpu = 3
+}
+
+impl DmaDirection {
+	fn from_bits(bits: u32) -> Self {
+		match bits {
+			0 => Self::Off,
+			1 => Self::Fifo,
+			2 => Self::CpuToGp0,
+			3 => Self::GpureadToCpu,
+
+			_ => unreachable!(),
+		}
+	}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -119,6 +206,7 @@ struct TexturePage {
 	y_base: u32,
 	bit_depth: TexBitDepth,
 	dithering: bool,
+	allow_drawing_to_display_area: bool,
 	flip_x: bool,
 	flip_y: bool,
 }
@@ -192,6 +280,13 @@ impl Vertex {
 			..Default::default()
 		}
 	}
+	fn plus_offset(&self, offset: Vertex) -> Self {
+		Self {
+			x: self.x + offset.x,
+			y: self.y + offset.y,
+			..*self
+		}
+	}
 }
 
 pub struct Gpu {
@@ -208,10 +303,32 @@ pub struct Gpu {
 	// misc draw settings
 	draw_area_top_left: Vertex,
 	draw_area_bottom_right: Vertex,
+	drawing_offset: Vertex,
 	force_mask_bit: bool,
 	check_mask_bit: bool,
 
 	tex_page: TexturePage,
+
+	display_enabled: bool,
+
+	irq: bool,
+
+	horizontal_res: HorizontalRes,
+	force_h368: bool,
+	vertical_res: VerticalRes,
+	video_mode: VideoMode,
+	display_colour_depth: ColourDepth,
+	vertical_interlace: bool,
+	// invalid on v2 gpus, not being implemented
+	flip_screen: bool,
+
+	dma_direction: DmaDirection,
+
+	display_start: Vertex,
+	horizontal_display_range: (u32, u32),
+	vertical_display_range: (u32, u32),
+
+	internal_reg: Option<u32>,
 }
 
 impl Gpu {
@@ -229,17 +346,41 @@ impl Gpu {
 
 			draw_area_top_left: Vertex::new(0, 0),
 			draw_area_bottom_right: Vertex::new(0, 0),
+			drawing_offset: Vertex::new(0, 0),
 			force_mask_bit: false,
 			check_mask_bit: false,
 
 			tex_page: TexturePage::default(),
+
+			display_enabled: false,
+
+			irq: false,
+
+			horizontal_res: HorizontalRes::H256,
+			force_h368: false,
+			vertical_res: VerticalRes::V240,
+			video_mode: VideoMode::Ntsc,
+			display_colour_depth: ColourDepth::FiveteenBit,
+			vertical_interlace: false,
+			flip_screen: false,
+
+			dma_direction: DmaDirection::Off,
+
+			display_start: Vertex::new(0, 0),
+			horizontal_display_range: (0, 0),
+			vertical_display_range: (0, 0),
+
+			internal_reg: None,
 		}
 	}
 
 	pub fn read32(&mut self, addr: u32) -> u32 {
 		match addr {
 			0x1F801810 => {
-				if let GP0State::SendData(info) = self.gp0_state {
+				if let Some(reg) = self.internal_reg {
+					self.reg_gpuread = reg;
+					self.internal_reg = None;
+				} else if let GP0State::SendData(info) = self.gp0_state {
 					self.reg_gpuread = self.process_vram_cpu_dma(info);
 				}
 
@@ -259,7 +400,55 @@ impl Gpu {
 	}
 
 	fn gpustat(&mut self) -> u32 {
-		0x1C000000
+		let ready_to_recv_cmd = matches!(self.gp0_state, GP0State::WaitingForNextCmd);
+		let ready_to_recv_vram = matches!(self.gp0_state, GP0State::WaitingForNextCmd | GP0State::SendData(..));
+		let ready_to_recv_dma = matches!(
+			self.gp0_state, 
+			GP0State::WaitingForNextCmd
+				| GP0State::RecvData(..)
+				| GP0State::SendData(..)
+		);
+
+		//debug!("cmd: {ready_to_recv_cmd} vram: {ready_to_recv_vram} dma: {ready_to_recv_dma} state: {:?}", self.gp0_state);
+
+		let dma_request = match self.dma_direction {
+			DmaDirection::Off => 0,
+			DmaDirection::Fifo => 1,
+			DmaDirection::CpuToGp0 => ready_to_recv_dma as u32,
+			DmaDirection::GpureadToCpu => ready_to_recv_vram as u32,
+		};
+
+		let _result = (self.tex_page.x_base)
+			| (self.tex_page.y_base) << 4
+			// TODO semi-transparency
+			| (self.tex_page.bit_depth as u32) << 7
+			| (self.tex_page.dithering as u32) << 9
+			| (self.tex_page.allow_drawing_to_display_area as u32) << 10
+			| (self.force_mask_bit as u32) << 11
+			| (self.check_mask_bit as u32) << 12
+			| (0) << 13 // TODO interlace field
+			| (self.flip_screen as u32) << 14
+			| (self.force_h368 as u32) << 16
+			| (self.horizontal_res as u32) << 17
+			| (0) << 19
+			| (self.video_mode as u32) << 20
+			| (self.display_colour_depth as u32) << 21
+			| (self.vertical_interlace as u32) << 22
+			| (self.display_enabled as u32) << 23
+			| (self.irq as u32) << 24
+			| (dma_request) << 25
+			| (ready_to_recv_cmd as u32) << 26
+			| (ready_to_recv_vram as u32) << 27 // DMA via GPUREAD
+			| (ready_to_recv_dma as u32) << 28  // DMA via GP0
+			| (self.dma_direction as u32) << 29
+			| (0) << 31
+			| 0x1C000000; // TODO Drawing even/odd lines in interlace mode
+
+			//debug!("gpustat: 0x{result:X}");
+
+			// TODO using the non-stubbed value seems to break more things
+			0x1C000000
+			//_result
 	}
 
 	pub fn gp0_cmd(&mut self, word: u32) {
@@ -286,7 +475,10 @@ impl Gpu {
 						GP0State::WaitingForParams { command: DrawCommand::QuickFill(word), index: 0, words_left: 2 }
 					},
 					0x1F => {
-						unimplemented!("GP0 IRQ")
+						trace!("GP0 IRQ");
+						self.irq = true;
+						
+						GP0State::WaitingForNextCmd
 					}
 
 					_ => todo!("Misc cmd 0x{word:X}")
@@ -368,6 +560,7 @@ impl Gpu {
 						self.tex_page.y_base = 256 * ((word >> 4) & 1);
 						self.tex_page.bit_depth = TexBitDepth::from_bits((word >> 7) & 3);
 						self.tex_page.dithering = (word >> 9) & 1 != 0;
+						self.tex_page.allow_drawing_to_display_area = (word >> 10) & 1 != 0;
 						self.tex_page.flip_x = (word >> 12) & 1 != 0;
 						self.tex_page.flip_y = (word >> 13) & 1 != 0;
 
@@ -400,7 +593,16 @@ impl Gpu {
 
 						GP0State::WaitingForNextCmd
 					},
-					0xE5 => { trace!("set drawing offset"); GP0State::WaitingForNextCmd },
+					0xE5 => { 
+						self.drawing_offset = Vertex::new(
+							(word & 0x7FF) as i32,
+							((word >> 11) & 0x7FF) as i32
+						);
+
+						trace!("set drawing offset ({}, {})", self.drawing_offset.x, self.drawing_offset.y);
+
+						GP0State::WaitingForNextCmd
+					},
 					// mask bit settings
 					0xE6 => {
 						self.force_mask_bit = word & 1 != 0;
@@ -443,21 +645,137 @@ impl Gpu {
 			}
 
 			GP0State::RecvData(vram_dma_info) => self.process_cpu_vram_dma(word, vram_dma_info),
-			GP0State::SendData(_) => panic!("write 0x{word:X} to GP0 during VRAM to CPU DMA"),
+			GP0State::SendData(_) => { error!("write 0x{word:X} to GP0 during VRAM to CPU DMA"); GP0State::WaitingForNextCmd },
 		}
 	}
 
 	fn gp1_cmd(&mut self, word: u32) {
 		self.gp1_state = match self.gp1_state {
-			GP1State::WaitingForNextCmd => match word >> 29 {
-				0 => {
-					//println!("reset gpu");
+			GP1State::WaitingForNextCmd => match word >> 24 {
+				// Reset GPU
+				0x0 => {
+					trace!("reset gpu");
 
 					GP1State::WaitingForNextCmd
 				},
-				_ => unimplemented!("unimplemented GP1 command: 0x{:X}", word >> 29),
+				// Reset command buffer
+				0x1 => {
+					trace!("Reset command buffer");
+					self.gp0_state = GP0State::WaitingForNextCmd;
+
+					GP1State::WaitingForNextCmd
+				},
+				// Acknowledge GPU IRQ
+				0x2 => {
+					trace!("Ack GPU IRQ");
+					self.irq = false;
+					
+					GP1State::WaitingForNextCmd
+				},
+				// Display Enable
+				0x3 => {
+					// 0=on, 1=off
+					self.display_enabled = word & 1 == 0;
+
+					debug!("Set display enabled: {}", self.display_enabled);
+
+					GP1State::WaitingForNextCmd
+				}
+				// Dma Direction / Data Request
+				0x4 => {
+					self.dma_direction = DmaDirection::from_bits(word & 3);
+
+					debug!("set DMA direction: {:?}", self.dma_direction);
+
+					GP1State::WaitingForNextCmd
+				},
+				// Start of Display area (in VRAM)
+				0x5 => {
+					self.display_start = Vertex::new((word & 0x3FF) as i32, ((word >> 10) & 0x1FF) as i32);
+
+					debug!("set display start: ({}, {})", self.display_start.x, self.display_start.y);
+
+					GP1State::WaitingForNextCmd
+				},
+				// Horizontal Display range (on screen)
+				0x6 => {
+					self.horizontal_display_range = (word & 0xFFF, (word >> 12) & 0xFFF);
+
+					debug!("set horizontal display range: {:X?}", self.horizontal_display_range);
+
+					GP1State::WaitingForNextCmd
+				},
+				// Vertical Display range (on screen)
+				0x7 => {
+					self.vertical_display_range = (word & 0xFFF, (word >> 12) & 0xFFF);
+
+					debug!("set horizontal display range: {:X?}", self.vertical_display_range);
+
+					GP1State::WaitingForNextCmd
+				},
+				// Display mode
+				0x8 => {
+					self.horizontal_res = HorizontalRes::from_bits(word & 3);
+					self.vertical_res = VerticalRes::from_bit((word >> 2) & 1 != 0);
+					self.video_mode = VideoMode::from_bit((word >> 3) & 1 != 0);
+					self.display_colour_depth = ColourDepth::from_bit((word >> 4) & 1 != 0);
+					self.vertical_interlace = (word >> 5) & 1 != 0;
+					self.force_h368 = (word >> 6) & 1 != 0;
+					self.flip_screen = (word >> 7) & 1 != 0;
+
+					debug!("set display mode");
+
+					GP1State::WaitingForNextCmd
+				},
+				// Read GPU internel register
+				0x10 | 0x11..=0x1F => {
+					let index = word & 7;
+
+					self.internal_reg = match index {
+						// nothing
+						0 ..= 1 => None,
+						// TODO texture window
+						2 => Some(0),
+						// draw area top left
+						3 => Some((self.draw_area_top_left.x as u32) | ((self.draw_area_top_left.y as u32) << 10)),
+						// draw area bottom right
+						4 => Some((self.draw_area_bottom_right.x as u32) | ((self.draw_area_bottom_right.y as u32) << 10)),
+						// TODO drawing offset
+						5 => Some(0),
+						// nothing on v0 gpus
+						6 ..= 7 => None,
+						_ => unreachable!(),
+					};
+
+					GP1State::WaitingForNextCmd
+				}
+				_ => unimplemented!("unimplemented GP1 command: 0x{:X}", word >> 24),
 			}
 		}
+	}
+
+	pub fn get_display_res(&self) -> (usize, usize) {
+		let width = if self.force_h368 {
+			368
+		} else {
+			match self.horizontal_res {
+				HorizontalRes::H256 => 256,
+				HorizontalRes::H320 => 320,
+				HorizontalRes::H512 => 512,
+				HorizontalRes::H640 => 640
+			}
+		};
+
+		let height = match self.vertical_res {
+			VerticalRes::V240 => 240,
+			VerticalRes::V480 => 480
+		};
+
+		(width, height)
+	}
+
+	pub fn get_display_start(&self) -> (usize, usize) {
+		(self.display_start.x as usize, self.display_start.y as usize)
 	}
 
 	fn exec_cmd(&mut self, cmd: DrawCommand) -> GP0State {
@@ -750,10 +1068,10 @@ impl Gpu {
 			RectSize::Sprite16x16 => Vertex::new(16, 16),
 		};
 		
-		let mut min_x = cmd.position.x;
-		let mut max_x = cmd.position.x + cmd.size.x - 1;
-		let mut min_y = cmd.position.y;
-		let mut max_y = cmd.position.y + cmd.size.y - 1;
+		let mut min_x = cmd.position.x + self.drawing_offset.x;
+		let mut max_x = cmd.position.x + self.drawing_offset.x + cmd.size.x - 1;
+		let mut min_y = cmd.position.y + self.drawing_offset.y;
+		let mut max_y = cmd.position.y + self.drawing_offset.y + cmd.size.y - 1;
 
 		// constrain rect to drawing area
 		min_x = cmp::max(min_x, self.draw_area_top_left.x);
@@ -835,17 +1153,17 @@ impl Gpu {
 			..self.tex_page
 		};
 
-		v[0] = Vertex::from_packet(self.gp0_params[0]);
+		v[0] = Vertex::from_packet(self.gp0_params[0]).plus_offset(self.drawing_offset);
 		v[0].colour = cmd.colour;
 		v[0].tex_x = (self.gp0_params[1 + 0 * texcoord_offset] & 0xFF) as i32;
 		v[0].tex_y = ((self.gp0_params[1 + 0 * texcoord_offset] >> 8) & 0xFF) as i32;
 
-		v[1] = Vertex::from_packet(self.gp0_params[1 * vertex_offset]);
+		v[1] = Vertex::from_packet(self.gp0_params[1 * vertex_offset]).plus_offset(self.drawing_offset);
 		v[1].colour = Colour::from_packet(self.gp0_params[1 + 0 * colour_offset]);
 		v[1].tex_x = (self.gp0_params[1 + 1 * texcoord_offset] & 0xFF) as i32;
 		v[1].tex_y = ((self.gp0_params[1 + 1 * texcoord_offset] >> 8) & 0xFF) as i32;
 
-		v[2] = Vertex::from_packet(self.gp0_params[2 * vertex_offset]);
+		v[2] = Vertex::from_packet(self.gp0_params[2 * vertex_offset]).plus_offset(self.drawing_offset);
 		v[2].colour = Colour::from_packet(self.gp0_params[1 + 1 * colour_offset]);
 		v[2].tex_x = (self.gp0_params[1 + 2 * texcoord_offset] & 0xFF) as i32;
 		v[2].tex_y = ((self.gp0_params[1 + 2 * texcoord_offset] >> 8) & 0xFF) as i32;
@@ -854,7 +1172,7 @@ impl Gpu {
 		self.draw_triangle(v[0], v[1], v[2], cmd);
 
 		if cmd.vertices == 4 {
-			v[3] = Vertex::from_packet(self.gp0_params[3 * vertex_offset]);
+			v[3] = Vertex::from_packet(self.gp0_params[3 * vertex_offset]).plus_offset(self.drawing_offset);
 			v[3].colour = Colour::from_packet(self.gp0_params[1 + 2 * colour_offset]);
 			v[3].tex_x = (self.gp0_params[1 + 3 * texcoord_offset] & 0xFF) as i32;
 			v[3].tex_y = ((self.gp0_params[1 + 3 * texcoord_offset] >> 8) & 0xFF) as i32;
@@ -881,7 +1199,7 @@ impl Gpu {
 		max_y = cmp::min(max_y, self.draw_area_bottom_right.y);
 
 		if min_x > max_x || min_y > max_y {
-			return;
+			//return;
 		}
 
 		if !vertices_valid(v0, v1) || !vertices_valid(v1, v2) || !vertices_valid(v2, v0) {

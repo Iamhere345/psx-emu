@@ -50,7 +50,7 @@ impl Interrupts {
 		}
 	}
 
-	fn ack_interrupt(&mut self, ack: u32) {
+	pub fn ack_interrupt(&mut self, ack: u32) {
 		self.reg_status &= ack;
 	}
 

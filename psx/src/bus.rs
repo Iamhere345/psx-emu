@@ -50,8 +50,17 @@ const EXPANSION2_END: usize = EXPANSION2_START + 0x42;
 const PAD_START: usize = 0x1F801040;
 const PAD_END: usize = 0x1F80104E;
 
+const SIO1_START: usize = 0x1F801050;
+const SIO1_END: usize = 0x1F80105E;
+
 const CDROM_START: usize = 0x1F801800;
 const CDROM_END: usize = 0x1F801803;
+
+const MDEC_START: usize = 0x1F801820;
+const MDEC_END: usize = 0x1F801824;
+
+const REDUX_START: usize = 0x1F802080;
+const REDUX_END: usize = 0x1F802084;
 
 const REGION_MASK: [u32; 8] = [
 	// KUSEG 2048Mb
@@ -124,8 +133,11 @@ impl Bus {
 			SPU_START			..= SPU_END => self.spu.read16(addr) as u8,
 			TIMERS_START		..= TIMERS_END =>{ error!("[0x{addr:X}] timer read8"); self.timers.read32(addr, scheduler) as u8},
 			GPU_START			..= GPU_END => 0,
+			DMA_START			..= DMA_END => self.dma.read8(addr),
 			PAD_START 			..= PAD_END => self.sio0.read32(addr) as u8,
+			SIO1_START			..= SIO1_END => { warn!("[0x{addr:X}] Unhandled SIO1 read8"); 0 }
 			CDROM_START			..= CDROM_END => self.cdrom.read8(addr),
+			REDUX_START			..= REDUX_END => 0,
 
 			_ => panic!("unhandled read8 0x{:X}", addr)
 		}
@@ -152,6 +164,7 @@ impl Bus {
 			IRQ_START	..= IRQ_END => self.interrupts.read32(addr) as u16,
 			SPU_START	..= SPU_END => self.spu.read16(addr),
 			PAD_START	..= PAD_END => self.sio0.read32(addr) as u16,
+			SIO1_START			..= SIO1_END => { warn!("[0x{addr:X}] Unhandled SIO1 read16"); 0 }
 			TIMERS_START..= TIMERS_END => self.timers.read32(addr, scheduler) as u16,
 
 			_ => panic!("unhandled read16 0x{addr:X}/0x{unmasked_addr:X}"),
@@ -173,6 +186,7 @@ impl Bus {
 			IRQ_START			..= IRQ_END => self.interrupts.read32(addr),
 			TIMERS_START		..= TIMERS_END => self.timers.read32(addr, scheduler),
 			SPU_START			..= SPU_END => self.spu.read32(addr),
+			MDEC_START			..= MDEC_END => { warn!("[{addr:X}] Unhandled read to MDEC"); 0 },
 
 			_ => u32::from_le_bytes([
 				self.read8(addr, scheduler),
@@ -231,7 +245,13 @@ impl Bus {
 			EXPANSION2_START	..= EXPANSION2_END => info!("write to expansion 2 register [0x{addr:X}] 0x{write:X}. Ignoring."),
 			CDROM_START			..= CDROM_END => self.cdrom.write8(addr, write, scheduler),
 			PAD_START			..= PAD_END => self.sio0.write32(addr, write.into(), scheduler),
-			
+			SIO1_START			..= SIO1_END => warn!("[0x{addr:X}] Unhandled SIO1 write8 0x{write:X}"),
+			DMA_START			..= DMA_END => self.dma.write8(addr, write),
+			REDUX_START 		..= REDUX_END => match addr {
+				0x1F802080 => print!("{}", char::from_u32(write as u32).unwrap_or('?')),
+				_ => {},
+			}
+
 			_ => panic!("unhandled write8 [0x{:X}] 0x{:X}", addr, write)
 		}
 	}
@@ -251,6 +271,7 @@ impl Bus {
 			SPU_START		..=	SPU_END => self.spu.write16(addr, write),
 			TIMERS_START	..= TIMERS_END => self.timers.write32(addr, write as u32, scheduler),
 			PAD_START 		..= PAD_END => self.sio0.write32(addr, write.into(), scheduler),
+			SIO1_START		..= SIO1_END => warn!("[0x{addr:X}] Unhandled SIO1 write16 0x{write:X}"),
 			
 			RAM_START		..= RAM_END => {
 				self.write8(unmasked_addr, lsb, scheduler);
@@ -292,7 +313,7 @@ impl Bus {
 				match addr as usize - MEMCONTROL_START {
 					0 => if write != 0x1F000000 { panic!("write to expansion 1 base addr 0x{:X}", write) },
 					4 => if write != 0x1F802000 { panic!("write to expansion 2 base addr 0x{:X}", write) },
-					_ => info!("unhandled write to memcontrol [0x{:X}] 0x{write:X}", addr as usize - MEMCONTROL_START),
+					_ => info!("unhandled write to memcontrol [0x{:X}] 0x{write:X}", addr as usize),
 				}
 			}
 			IRQ_START			..= IRQ_END => self.interrupts.write32(addr, write),
@@ -318,6 +339,8 @@ impl Bus {
 			},
 			GPU_START			..= GPU_END => self.gpu.write32(addr, write),
 			SPU_START			..= SPU_END => self.spu.write32(addr, write),
+			MDEC_START			..= MDEC_END => warn!("[0x{addr:X}] Unhandled write to MDEC 0x{write:X}"),
+			REDUX_START			..= REDUX_END => {},
 
 			_ => panic!("unhandled write32 [0x{:X}/0x{:X}] 0x{:X}", addr, unmasked_addr, write)
 		}
