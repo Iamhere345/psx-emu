@@ -27,8 +27,12 @@ impl Instruction {
 		self.raw >> 26
 	}
 
-	pub fn cop0_opcode(&self) -> u32 {
+	pub fn cop_opcode(&self) -> u32 {
 		(self.raw >> 21) & 0x1F
+	}
+
+	pub fn cop_num(&self) -> u32 {
+		(self.raw >> 26) & 3
 	}
 
 	pub fn reg_src(&self) -> u32 {
@@ -162,7 +166,7 @@ impl Instruction {
 			0x0E => ("xori".to_string(), rt_rs_imm!()),
 			0x0F => ("lui".to_string(), vec![InstrField::Reg(self.reg_tgt()), InstrField::Imm(self.imm16() << 16)]),
 
-			0x10 => match self.cop0_opcode() {
+			0x10 => match self.cop_opcode() {
 				0x00 => ("mfc".to_string(), rt_rd!()),
 				0x02 => ("cfc".to_string(), rt_rd!()),
 				0x04 => ("mtc".to_string(), rt_rd!()),
@@ -296,15 +300,26 @@ impl R3000 {
 			0x0E => self.op_xori(instr),
 			0x0F => self.op_lui(instr),
 
-			0x10 => match instr.cop0_opcode() {
-				0x00 => self.op_mfc(instr),
-				0x04 => self.op_mtc(instr),
+			// COP0
+			0x10 => match instr.cop_opcode() {
+				0x00 => self.op_mfcn(instr),
+				0x04 => self.op_mtcn(instr),
 				0x10 => self.op_rfe(instr),
 				_ => self.op_illegal(instr),
-			}
+			},
 
+			// COP1
 			0x11 => self.op_copn(),
-			0x12 => self.op_gte(instr),
+			// COP2
+			0x12 => match instr.cop_opcode() {
+				0x00 => self.op_mfcn(instr),
+				0x02 => self.op_mfcn(instr), // CFC2
+				0x04 => self.op_mtcn(instr),
+				0x06 => {}, // CTC2
+				0x10..=0x1F => self.op_gte(instr), // COP2 imm25
+				_ => self.op_illegal(instr),
+			},
+			// COP3
 			0x13 => self.op_copn(),
 
 			0x20 => self.op_lb(instr, bus, scheduler),
@@ -320,14 +335,8 @@ impl R3000 {
 			0x2B => self.op_sw(instr, bus, scheduler),
 			0x2E => self.op_swr(instr, bus, scheduler),
 
-			0x30 => self.op_lwcn(),
-			0x31 => self.op_lwcn(),
-			0x32 => self.op_lwc_gte(instr),
-			0x33 => self.op_lwcn(),
-			0x38 => self.op_swcn(),
-			0x39 => self.op_swcn(),
-			0x3A => self.op_swc_gte(instr),
-			0x3B => self.op_swcn(),
+			0x30 ..= 0x33 => self.op_lwcn(instr, bus, scheduler),
+			0x38 ..= 0x3B => self.op_swcn(instr, bus, scheduler),
 
 			_ => self.op_illegal(instr),
 		}
@@ -843,20 +852,30 @@ impl R3000 {
 	}
 
 	fn op_illegal(&mut self, instr: Instruction) {
-		log::error!("Illegal instruction 0x{:X} (PC: 0x{:X}) (opcode: 0x{:X} funct: 0x{:X} cop0 opcode: 0x{:X})", instr.raw, self.pc, instr.opcode(), instr.funct(), instr.cop0_opcode());
+		log::error!("Illegal instruction 0x{:X} (PC: 0x{:X}) (opcode: 0x{:X} funct: 0x{:X} cop0 opcode: 0x{:X})", instr.raw, self.pc, instr.opcode(), instr.funct(), instr.cop_opcode());
 
 		self.exception(Exception::ReservedInstruction);
 	}
 
 	// ? Cop0 Instructions
-	fn op_mfc(&mut self, instr: Instruction) {
-		let value = self.cop0.read_reg(instr.reg_dst());
+	fn op_mfcn(&mut self, instr: Instruction) {
+		let value = match instr.cop_num() {
+			0 => self.cop0.read_reg(instr.reg_dst()),
+			2 => 0,
+			_ => todo!("MFC{} $r{}", instr.cop_num(), instr.reg_dst())
+		};
 
 		self.registers.write_gpr_delayed(instr.reg_tgt(), value);
 	}
 	
-	fn op_mtc(&mut self, instr: Instruction) {
-		self.cop0.write_reg(instr.reg_dst(), self.registers.read_gpr(instr.reg_tgt()));
+	fn op_mtcn(&mut self, instr: Instruction) {
+		let write = self.registers.read_gpr(instr.reg_tgt());
+
+		match instr.cop_num() {
+			0 => self.cop0.write_reg(instr.reg_dst(), write),
+			2 => {},
+			_ => todo!("MTC{} $r{}", instr.cop_num(), instr.reg_dst()),
+		};
 	}
 
 	fn op_rfe(&mut self, instr: Instruction) {
@@ -878,20 +897,40 @@ impl R3000 {
 		//error!("Unhandled GTE instruction: 0x{:X}", instr.raw);
 	}
 
-	fn op_lwcn(&mut self) {
-		self.exception(Exception::CopUnusable);
+	fn op_lwcn(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
+		if self.cop0.read_reg(12) & 0x10000 != 0 {
+			return;
+		}
+
+		let offset = self.registers.read_gpr(instr.reg_src());
+		let addr = offset.wrapping_add(instr.imm16_se());
+
+		if addr % 4 == 0 {
+			match instr.cop_num() {
+				2 => {},
+				_ => self.exception(Exception::CopUnusable),
+			}
+		} else {
+			self.exception(Exception::AddrLoadError);
+			self.cop0.reg_badvaddr = addr;
+		}
 	}
 
-	fn op_lwc_gte(&mut self, instr: Instruction) {
-		//error!("Unhandled GTE LWC: 0x{:X}", instr.raw);
-	}
+	fn op_swcn(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
+		if self.cop0.read_reg(12) & 0x10000 != 0 {
+			return;
+		}
 
-	fn op_swcn(&mut self) {
-		self.exception(Exception::CopUnusable);
-	}
+		let offset = self.registers.read_gpr(instr.reg_src());
+		let addr = offset.wrapping_add(instr.imm16_se());
 
-	fn op_swc_gte(&mut self, instr: Instruction) {
-		//error!("Unhandled GTE SWC: 0x{:X}", instr.raw);
+		let write = match instr.cop_num() {
+			2 => 0,
+			3 => { self.exception(Exception::ReservedInstruction); 0 },
+			_ => { self.exception(Exception::CopUnusable); 0 }
+		};
+
+		self.store32(bus, addr, write, scheduler);
 	}
 
 }
@@ -900,7 +939,6 @@ impl R3000 {
 impl R3000 {
 	fn load32(bus: &mut Bus, addr: u32, scheduler: &mut Scheduler) -> u32 {
 		if bus.read_breakpoints.contains(&addr) {
-			println!("breakpoint 0x{addr:08X} hit");
 			bus.breakpoint_hit = (true, addr);
 		}
 		

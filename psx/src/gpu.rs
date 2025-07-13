@@ -677,7 +677,7 @@ impl Gpu {
 					// 0=on, 1=off
 					self.display_enabled = word & 1 == 0;
 
-					debug!("Set display enabled: {}", self.display_enabled);
+					trace!("Set display enabled: {}", self.display_enabled);
 
 					GP1State::WaitingForNextCmd
 				}
@@ -685,7 +685,7 @@ impl Gpu {
 				0x4 => {
 					self.dma_direction = DmaDirection::from_bits(word & 3);
 
-					debug!("set DMA direction: {:?}", self.dma_direction);
+					trace!("set DMA direction: {:?}", self.dma_direction);
 
 					GP1State::WaitingForNextCmd
 				},
@@ -693,7 +693,7 @@ impl Gpu {
 				0x5 => {
 					self.display_start = Vertex::new((word & 0x3FF) as i32, ((word >> 10) & 0x1FF) as i32);
 
-					debug!("set display start: ({}, {})", self.display_start.x, self.display_start.y);
+					trace!("set display start: ({}, {})", self.display_start.x, self.display_start.y);
 
 					GP1State::WaitingForNextCmd
 				},
@@ -701,7 +701,7 @@ impl Gpu {
 				0x6 => {
 					self.horizontal_display_range = (word & 0xFFF, (word >> 12) & 0xFFF);
 
-					debug!("set horizontal display range: {:X?}", self.horizontal_display_range);
+					trace!("set horizontal display range: {:X?}", self.horizontal_display_range);
 
 					GP1State::WaitingForNextCmd
 				},
@@ -709,7 +709,7 @@ impl Gpu {
 				0x7 => {
 					self.vertical_display_range = (word & 0xFFF, (word >> 12) & 0xFFF);
 
-					debug!("set horizontal display range: {:X?}", self.vertical_display_range);
+					trace!("set horizontal display range: {:X?}", self.vertical_display_range);
 
 					GP1State::WaitingForNextCmd
 				},
@@ -723,7 +723,7 @@ impl Gpu {
 					self.force_h368 = (word >> 6) & 1 != 0;
 					self.flip_screen = (word >> 7) & 1 != 0;
 
-					debug!("set display mode");
+					trace!("set display mode");
 
 					GP1State::WaitingForNextCmd
 				},
