@@ -2,6 +2,7 @@ use std::{fmt::Display, mem};
 
 use log::*;
 
+use crate::cpu::gte::Gte;
 use crate::{bus::Bus, scheduler::Scheduler};
 use crate::kernel::KernelFunction;
 use cop0::*;
@@ -9,6 +10,7 @@ use instructions::Instruction;
 
 pub mod instructions;
 mod cop0;
+mod gte;
 
 #[derive(Debug)]
 pub struct Registers {
@@ -98,6 +100,7 @@ pub struct R3000 {
 	last_instruction: u32,
 
 	cop0: Cop0,
+	gte: Gte,
 
 	delayed_branch: Option<u32>,
 	in_delay_slot: bool,
@@ -118,6 +121,7 @@ impl R3000 {
 			last_instruction: 0,
 			
 			cop0: Cop0::new(),
+			gte: Gte::new(),
 
 			delayed_branch: None,
 			in_delay_slot: false,
