@@ -49,7 +49,30 @@ impl RectSize {
 			1 => Self::Pixel,
 			2 => Self::Sprite8x8,
 			3 => Self::Sprite16x16,
-			_ => unimplemented!(),
+
+			_ => unreachable!(),
+		}
+	}
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+enum SemiTransparency {
+	#[default]
+	HalfBPlusHalfF,
+	BPlusF,
+	BMinusF,
+	BPlusFOver4,
+}
+
+impl SemiTransparency {
+	fn from_bits(bits: u32) -> Self {
+		match bits {
+			0 => Self::HalfBPlusHalfF,
+			1 => Self::BPlusF,
+			2 => Self::BMinusF,
+			3 => Self::BPlusFOver4,
+
+			_ => unreachable!(),
 		}
 	}
 }
@@ -204,6 +227,7 @@ struct VramDmaInfo {
 struct TexturePage {
 	x_base: u32,
 	y_base: u32,
+	transp_type: SemiTransparency,
 	bit_depth: TexBitDepth,
 	dithering: bool,
 	allow_drawing_to_display_area: bool,
@@ -558,6 +582,7 @@ impl Gpu {
 
 						self.tex_page.x_base = 64 * (word & 0xF);
 						self.tex_page.y_base = 256 * ((word >> 4) & 1);
+						self.tex_page.transp_type = SemiTransparency::from_bits((word >> 5) & 3);
 						self.tex_page.bit_depth = TexBitDepth::from_bits((word >> 7) & 3);
 						self.tex_page.dithering = (word >> 9) & 1 != 0;
 						self.tex_page.allow_drawing_to_display_area = (word >> 10) & 1 != 0;
@@ -815,7 +840,7 @@ impl Gpu {
 					v1.colour = cmd.colour;
 				}
 
-				self.draw_line(v0, v1);
+				self.draw_line(v0, v1, cmd.semi_transparent);
 
 				GP0State::WaitingForNextCmd
 			}
@@ -871,7 +896,7 @@ impl Gpu {
 			// wrap from 1023 to 0
 			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
-			self.draw_pixel_15bit(halfword, vram_col, vram_row);
+			self.draw_pixel_15bit(halfword, vram_col, vram_row, false);
 
 			info.current_col += 1;
 			info.halfwords_left -= 1;
@@ -947,7 +972,7 @@ impl Gpu {
 
 				let src = self.vram[src_addr];
 				//trace!("[VRAM-VRAM DMA] draw pixel 0x{src:X} at ({}, {})", (dest_x + x_offset) as u32, (dest_y + y_offset) as u32);
-				self.draw_pixel_15bit(src, ((dest_x + x_offset) & 0x3FF) as u32, ((dest_y + y_offset) & 0x1FF) as u32);
+				self.draw_pixel_15bit(src, ((dest_x + x_offset) & 0x3FF) as u32, ((dest_y + y_offset) & 0x1FF) as u32, false);
 			}
 		}
 	}
@@ -967,7 +992,7 @@ impl Gpu {
 			verts
 				.windows(2)
 				.map(|v| (&v[0], &v[1]))
-				.for_each(|(v0, v1)| self.draw_line(*v0, *v1));
+				.for_each(|(v0, v1)| self.draw_line(*v0, *v1, params.semi_transparent));
 		} else {
 			let verts: Vec<Vertex> = self.gp0_params.drain(..).map(|v| {
 				let mut vertex = Vertex::from_packet(v);
@@ -980,11 +1005,11 @@ impl Gpu {
 			verts
 				.windows(2)
 				.map(|v| (&v[0], &v[1]))
-				.for_each(|(v0, v1)| self.draw_line(*v0, *v1));
+				.for_each(|(v0, v1)| self.draw_line(*v0, *v1, params.semi_transparent));
 		}
 	}
 
-	fn draw_line(&mut self, v0: Vertex, v1: Vertex) {
+	fn draw_line(&mut self, v0: Vertex, v1: Vertex, semi_transparent: bool) {
 		if !vertices_valid(v0, v1) {
 			return;
 		}
@@ -1033,7 +1058,7 @@ impl Gpu {
 					colour = apply_dithering(colour, vertex)
 				}
 
-				self.draw_pixel_15bit(colour.truncate_to_15bit(), vertex.x as u32, vertex.y as u32);
+				self.draw_pixel_15bit(colour.truncate_to_15bit(), vertex.x as u32, vertex.y as u32, semi_transparent);
 
 			}
 
@@ -1098,7 +1123,7 @@ impl Gpu {
 					u16::from(cmd.colour.r) | (u16::from(cmd.colour.g) << 5) | (u16::from(cmd.colour.b) << 10)
 				};
 
-				self.draw_pixel_15bit(draw_colour, x as u32, y as u32);
+				self.draw_pixel_15bit(draw_colour, x as u32, y as u32, cmd.semi_transparent);
 			}
 		}
 	}
@@ -1243,7 +1268,7 @@ impl Gpu {
 						shaded_colour.truncate_to_15bit()
 					};
 
-					self.draw_pixel_15bit(textured_colour, x as u32, y as u32);
+					self.draw_pixel_15bit(textured_colour, x as u32, y as u32, cmd.semi_transparent);
 				}
 			}
 		}
@@ -1281,7 +1306,7 @@ impl Gpu {
 
 	}
 
-	fn draw_pixel_15bit(&mut self, colour: u16, x: u32, y: u32) {
+	fn draw_pixel_15bit(&mut self, colour: u16, x: u32, y: u32, semi_transparent: bool) {
 		let mask = u16::from(self.force_mask_bit) << 15;
 
 		let old_pixel = self.vram[coord_to_vram_index(x, y) as usize];
@@ -1290,13 +1315,49 @@ impl Gpu {
 			return;
 		}
 
-		self.vram[coord_to_vram_index(x, y) as usize] = colour | mask;
+		let draw_pixel = if semi_transparent {
+			self.apply_semi_transparency(old_pixel, colour)
+		} else {
+			colour
+		};
+
+		self.vram[coord_to_vram_index(x, y) as usize] = draw_pixel | mask;
+	}
+
+	fn apply_semi_transparency(&self, background: u16, foreground: u16) -> u16 {
+		let b = Colour::from_rgb555(background);
+		let f = Colour::from_rgb555(foreground);
+
+		let result = match self.tex_page.transp_type {
+			SemiTransparency::HalfBPlusHalfF => Colour {
+				r: ((0.5 * b.r as f64) + (0.5 * f.r as f64)).clamp(0.0, 31.0) as u8,
+				g: ((0.5 * b.g as f64) + (0.5 * f.g as f64)).clamp(0.0, 31.0) as u8,
+				b: ((0.5 * b.b as f64) + (0.5 * f.b as f64)).clamp(0.0, 31.0) as u8,
+			},
+			SemiTransparency::BPlusF => Colour {
+				r: (b.r as f64 + f.r as f64).clamp(0.0, 31.0) as u8,
+				g: (b.g as f64 + f.g as f64).clamp(0.0, 31.0) as u8,
+				b: (b.b as f64 + f.b as f64).clamp(0.0, 31.0) as u8,
+			},
+			SemiTransparency::BMinusF => Colour {
+				r: (b.r as f64 - f.r as f64).clamp(0.0, 31.0) as u8,
+				g: (b.g as f64 - f.g as f64).clamp(0.0, 31.0) as u8,
+				b: (b.b as f64 - f.b as f64).clamp(0.0, 31.0) as u8,
+			},
+			SemiTransparency::BPlusFOver4 => Colour {
+				r: (b.r as f64 + (0.25 * f.r as f64)).clamp(0.0, 31.0) as u8,
+				g: (b.g as f64 + (0.25 * f.g as f64)).clamp(0.0, 31.0) as u8,
+				b: (b.b as f64 + (0.25 * f.b as f64)).clamp(0.0, 31.0) as u8,
+			}
+		};
+
+		(result.r as u16) | ((result.g as u16) << 5) | ((result.b as u16) << 10)
 	}
 	
 }
 
 fn coord_to_vram_index(x: u32, y: u32) -> u32 {
-	(1024 * y).wrapping_add(x)
+	(1024 * (y & 0x1FF)).wrapping_add(x & 0x3FF)
 }
 
 fn cross_product_z(v0: Vertex, v1: Vertex, v2: Vertex) -> i32 {
@@ -1309,7 +1370,7 @@ fn ensure_vertex_order(v: &mut [Vertex]) -> bool {
 	let cross_product_z = cross_product_z(v[0], v[1], v[2]);
 
 	if cross_product_z < 0 {
-		v.swap(0, 1);
+		v.swap(1, 2);
 		return true;
 	}
 
@@ -1377,8 +1438,8 @@ fn interpolate_uv(lambda: [f64; 3], tex_coords: [Vertex; 3]) -> Vertex {
 	let coords_y = tex_coords.map(|coord| coord.tex_y as f64);
 
 	// not rounding these fixes minor texcoord interpolation errors
-	let u = (lambda[0] * coords_x[0] + lambda[1] * coords_x[1] + lambda[2] * coords_x[2]) as i32;
-	let v = (lambda[0] * coords_y[0] + lambda[1] * coords_y[1] + lambda[2] * coords_y[2]) as i32;
+	let u = (lambda[0] * coords_x[0] + lambda[1] * coords_x[1] + lambda[2] * coords_x[2]).round() as i32;
+	let v = (lambda[0] * coords_y[0] + lambda[1] * coords_y[1] + lambda[2] * coords_y[2]).round() as i32;
 
 	Vertex::new(u, v)
 }

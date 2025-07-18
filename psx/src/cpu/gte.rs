@@ -461,7 +461,7 @@ impl Gte {
 		let instr = GteInstruction::from_raw(instr_raw);
 
 		match instr.opcode() {
-			_ => unimplemented!("GTE instruction 0x{:X}", instr.opcode())
+			_ => {},//unimplemented!("GTE instruction 0x{:X}", instr.opcode())
 		}
 
 	}
