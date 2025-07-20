@@ -125,8 +125,8 @@ impl Bus {
 			RAM_START			..= RAM_END => self.ram[(addr as usize) & RAM_SIZE - RAM_START],
 			SCRATCHPAD_START	..= SCRATCHPAD_END => self.scratchpad[addr as usize - SCRATCHPAD_START],
 
-			EXPANSION1_START	..= EXPANSION1_END => {info!("read to expansion 1 register 0x{:X}", unmasked_addr); 0xFF},
-			EXPANSION2_START	..= EXPANSION2_END => {info!("read to expansion 2 register 0x{:X}", unmasked_addr); 0},
+			EXPANSION1_START	..= EXPANSION1_END => { debug!("read to expansion 1 register 0x{:X}", unmasked_addr); 0xFF },
+			EXPANSION2_START	..= EXPANSION2_END => { debug!("read to expansion 2 register 0x{:X}", unmasked_addr); 0 },
 			MEMCONTROL_START	..= MEMCONTROL_END => 0,
 			RAM_SIZE_START		..= RAM_SIZE_END => 0,
 
@@ -242,7 +242,7 @@ impl Bus {
 
 			SPU_START			..= SPU_END => self.spu.write16(addr, write.into()),
 			TIMERS_START		..= TIMERS_END => { error!("write8 to timers [0x{addr:X} 0x{write:X}"); self.timers.write32(addr, write as u32, scheduler); },
-			EXPANSION2_START	..= EXPANSION2_END => info!("write to expansion 2 register [0x{addr:X}] 0x{write:X}. Ignoring."),
+			EXPANSION2_START	..= EXPANSION2_END => debug!("write to expansion 2 register [0x{addr:X}] 0x{write:X}. Ignoring."),
 			CDROM_START			..= CDROM_END => self.cdrom.write8(addr, write, scheduler),
 			PAD_START			..= PAD_END => self.sio0.write32(addr, write.into(), scheduler),
 			SIO1_START			..= SIO1_END => warn!("[0x{addr:X}] Unhandled SIO1 write8 0x{write:X}"),
@@ -313,7 +313,7 @@ impl Bus {
 				match addr as usize - MEMCONTROL_START {
 					0 => if write != 0x1F000000 { panic!("write to expansion 1 base addr 0x{:X}", write) },
 					4 => if write != 0x1F802000 { panic!("write to expansion 2 base addr 0x{:X}", write) },
-					_ => info!("unhandled write to memcontrol [0x{:X}] 0x{write:X}", addr as usize),
+					_ => debug!("unhandled write to memcontrol [0x{:X}] 0x{write:X}", addr as usize),
 				}
 			}
 			IRQ_START			..= IRQ_END => self.interrupts.write32(addr, write),

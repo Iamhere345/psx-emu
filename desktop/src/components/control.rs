@@ -50,6 +50,7 @@ impl Control {
 				let exe_path = self.select_file(("EXE File", &["exe", "ps-exe"]));
 
 				if let Some(exe) = exe_path {
+					self.reset_emu(psx, tty, breakpoints);
 					psx.sideload_exe(fs::read(exe).unwrap());
 				}
 			}

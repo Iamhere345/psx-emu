@@ -235,6 +235,12 @@ struct TexturePage {
 	flip_y: bool,
 }
 
+#[derive(Default)]
+struct TextureWindow {
+	mask: Vertex,
+	offset: Vertex,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Colour {
 	r: u8,
@@ -252,6 +258,14 @@ impl Colour {
 			r: ((word & 0xFF) >> 3) as u8,
 			g: (((word >> 8) & 0xFF) >> 3) as u8,
 			b: (((word >> 16) & 0xFF) >> 3) as u8
+		}
+	}
+
+	fn rgb555_to_rgb888(word: u16) -> Self {
+		Self {
+			r: ((word & 0x1F) << 3) as u8,
+			g: (((word >> 5) & 0x1F) << 3) as u8,
+			b: (((word >> 10) & 0x1F) << 3) as u8,
 		}
 	}
 
@@ -332,6 +346,7 @@ pub struct Gpu {
 	check_mask_bit: bool,
 
 	tex_page: TexturePage,
+	tex_window: TextureWindow,
 
 	display_enabled: bool,
 
@@ -375,6 +390,7 @@ impl Gpu {
 			check_mask_bit: false,
 
 			tex_page: TexturePage::default(),
+			tex_window: TextureWindow::default(),
 
 			display_enabled: false,
 
@@ -592,7 +608,12 @@ impl Gpu {
 						GP0State::WaitingForNextCmd
 				 	},
 					0xE2 => {
-						//trace!("Texture window:\nMaskX: {} MaskY: {}\nOffsetX: {} OffsetY: {}", word & 0xF, (word >> 5) & 0x1F, (word >> 10) & 0x1F, (word >> 15) & 0x1F);
+						trace!("Texture window");
+
+						self.tex_window = TextureWindow {
+							mask: Vertex::new((word as i32 & 0x1F) * 8, ((word as i32 >> 5) & 0x1F) * 8),
+							offset: Vertex::new(((word as i32 >> 10) & 0x1F) * 8, ((word as i32 >> 15) & 0x1F) * 8),
+						};
 
 						GP0State::WaitingForNextCmd
 					},
@@ -1092,24 +1113,23 @@ impl Gpu {
 			RectSize::Sprite8x8 => Vertex::new(8, 8),
 			RectSize::Sprite16x16 => Vertex::new(16, 16),
 		};
-		
-		let mut min_x = cmd.position.x + self.drawing_offset.x;
-		let mut max_x = cmd.position.x + self.drawing_offset.x + cmd.size.x - 1;
-		let mut min_y = cmd.position.y + self.drawing_offset.y;
-		let mut max_y = cmd.position.y + self.drawing_offset.y + cmd.size.y - 1;
 
-		// constrain rect to drawing area
-		min_x = cmp::max(min_x, self.draw_area_top_left.x);
-		max_x = cmp::min(max_x, self.draw_area_bottom_right.x);
-		min_y = cmp::max(min_y, self.draw_area_top_left.y);
-		max_y = cmp::min(max_y, self.draw_area_bottom_right.y);
-
-		if min_x > max_x || min_y > max_y {
-			return;
-		}
+		let min_x = cmd.position.x + self.drawing_offset.x;
+		let max_x = cmd.position.x + self.drawing_offset.x + cmd.size.x - 1;
+		let min_y = cmd.position.y + self.drawing_offset.y;
+		let max_y = cmd.position.y + self.drawing_offset.y + cmd.size.y - 1;
 
 		for y in min_y..=max_y {
+
+			if y < self.draw_area_top_left.y || y > self.draw_area_bottom_right.y {
+            	continue;
+        	}
+
 			for x in min_x..=max_x {
+
+				if x < self.draw_area_top_left.x || x > self.draw_area_bottom_right.x {
+                	continue;
+            	}
 
 				let draw_colour = if cmd.textured {
 					let colour = self.sample_texture(Vertex::new(cmd.position.tex_x + (x - min_x), cmd.position.tex_y + (y - min_y)), cmd.clut);
@@ -1250,25 +1270,33 @@ impl Gpu {
 						cmd.colour
 					};
 
-					let textured_colour = if cmd.textured {
+					let (textured_colour, semi_transparent) = if cmd.textured {
 						
 						let coords = compute_barycentric_coords(p, v0, v1, v2);
 						let interpolated_coords = interpolate_uv(coords, [v0, v1, v2]);
 
-						let colour = self.sample_texture(interpolated_coords, cmd.clut);
+						let tex_colour_u16 = self.sample_texture(interpolated_coords, cmd.clut);
+						let tex_colour = Colour::rgb555_to_rgb888(tex_colour_u16);
 
 						// black is transparent in textures
-						if colour == 0 {
+						if tex_colour_u16 == 0 {
 							continue;
 						}
 
-						colour
+						// bit 15 of the texture colour specifies if this pixel should be semi-transparent
+						let semi_transparent = cmd.semi_transparent && tex_colour_u16 & 0x8000 != 0;
+
+						if cmd.raw_texture {
+							(tex_colour, semi_transparent)
+						} else {
+							(apply_modulation(tex_colour, shaded_colour), semi_transparent)
+						}
 
 					} else {
-						shaded_colour.truncate_to_15bit()
+						(shaded_colour, cmd.semi_transparent)
 					};
 
-					self.draw_pixel_15bit(textured_colour, x as u32, y as u32, cmd.semi_transparent);
+					self.draw_pixel_15bit(textured_colour.truncate_to_15bit(), x as u32, y as u32, semi_transparent);
 				}
 			}
 		}
@@ -1276,28 +1304,33 @@ impl Gpu {
 
 	fn sample_texture(&mut self, tex_coords: Vertex, clut: Vertex) -> u16 {
 
+		let masked_coords = Vertex::new(
+			tex_coords.x & (!(self.tex_window.mask.x)) | (self.tex_window.offset.x & self.tex_window.mask.x),
+			tex_coords.y & (!(self.tex_window.mask.y)) | (self.tex_window.offset.y & self.tex_window.mask.y)
+		);
+
 		match self.tex_page.bit_depth {
 			TexBitDepth::FourBit => {
-				let tex_x = self.tex_page.x_base + ((tex_coords.x as u32) / 4);
-				let tex_y = self.tex_page.y_base + tex_coords.y as u32;
+				let tex_x = self.tex_page.x_base + ((masked_coords.x as u32) / 4);
+				let tex_y = self.tex_page.y_base + masked_coords.y as u32;
 
 				let texel = self.vram[coord_to_vram_index(tex_x, tex_y) as usize];
-				let clut_index = ((texel >> (tex_coords.x % 4) * 4) & 0xF) as u32;
+				let clut_index = ((texel >> (masked_coords.x % 4) * 4) & 0xF) as u32;
 
 				self.vram[coord_to_vram_index(clut.x as u32 + clut_index, clut.y as u32) as usize]
 			},
 			TexBitDepth::EightBit => {
-				let tex_x = self.tex_page.x_base + ((tex_coords.x as u32) / 2);
-				let tex_y = self.tex_page.y_base + tex_coords.y as u32;
+				let tex_x = self.tex_page.x_base + ((masked_coords.x as u32) / 2);
+				let tex_y = self.tex_page.y_base + masked_coords.y as u32;
 
 				let texel = self.vram[coord_to_vram_index(tex_x, tex_y) as usize];
-				let clut_index = ((texel >> (tex_coords.x % 2) * 8) & 0xFF) as u32;
+				let clut_index = ((texel >> (masked_coords.x % 2) * 8) & 0xFF) as u32;
 
 				self.vram[coord_to_vram_index(clut.x as u32 + clut_index, clut.y as u32) as usize]
 			}
 			TexBitDepth::FiveteenBit => {
-				let tex_x = self.tex_page.x_base + (tex_coords.x as u32);
-				let tex_y = self.tex_page.y_base + (tex_coords.y as u32);
+				let tex_x = self.tex_page.x_base + (masked_coords.x as u32);
+				let tex_y = self.tex_page.y_base + (masked_coords.y as u32);
 				let texel = self.vram[coord_to_vram_index(tex_x, tex_y) as usize];
 
 				texel
@@ -1437,7 +1470,6 @@ fn interpolate_uv(lambda: [f64; 3], tex_coords: [Vertex; 3]) -> Vertex {
 	let coords_x = tex_coords.map(|coord| coord.tex_x as f64);
 	let coords_y = tex_coords.map(|coord| coord.tex_y as f64);
 
-	// not rounding these fixes minor texcoord interpolation errors
 	let u = (lambda[0] * coords_x[0] + lambda[1] * coords_x[1] + lambda[2] * coords_x[2]).round() as i32;
 	let v = (lambda[0] * coords_y[0] + lambda[1] * coords_y[1] + lambda[2] * coords_y[2]).round() as i32;
 
@@ -1452,6 +1484,14 @@ fn apply_dithering(colour: Colour, p: Vertex) -> Colour {
         g: colour.g.saturating_add_signed(offset),
         b: colour.b.saturating_add_signed(offset),
     }
+}
+
+fn apply_modulation(tex_colour: Colour, shaded_colour: Colour) -> Colour {
+	Colour {
+		r: ((u32::from(tex_colour.r) * u32::from(shaded_colour.r)) / 128).clamp(0, 255) as u8,
+		g: ((u32::from(tex_colour.g) * u32::from(shaded_colour.g)) / 128).clamp(0, 255) as u8,
+		b: ((u32::from(tex_colour.b) * u32::from(shaded_colour.b)) / 128).clamp(0, 255) as u8,
+	}
 }
 
 fn vertices_valid(v0: Vertex, v1: Vertex) -> bool {
