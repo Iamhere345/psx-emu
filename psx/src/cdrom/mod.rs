@@ -371,7 +371,7 @@ impl Cdrom {
 			| (u8::from(self.disc.is_none()) << 4)		// shell open
 			| (self.drive_state as u8);			// reading data sectors
 		
-		trace!("getstat: 0b{result:b}");
+		trace!("getstat: 0b{result:b} (drive state: {:?}", self.drive_state);
 
 		result
 	}
