@@ -7,6 +7,29 @@ const MAC1_OVERFLOW: u32 = 30;
 const MAC1_UNDERFLOW: u32 = 27;
 const IR1_SATURATED: u32 = 24;
 const COLOUR_R_SATURATED: u32 = 21;
+const DIVIDE_OVERFLOW: u32 = 17;
+const SX2_SATURATED: u32 = 14;
+const IR0_SATURATED: u32 = 12;
+
+const UNR_TABLE: [u32; 0x101] = [
+    0xFF, 0xFD, 0xFB, 0xF9, 0xF7, 0xF5, 0xF3, 0xF1, 0xEF, 0xEE, 0xEC, 0xEA, 0xE8, 0xE6, 0xE4, 0xE3,
+    0xE1, 0xDF, 0xDD, 0xDC, 0xDA, 0xD8, 0xD6, 0xD5, 0xD3, 0xD1, 0xD0, 0xCE, 0xCD, 0xCB, 0xC9, 0xC8,
+    0xC6, 0xC5, 0xC3, 0xC1, 0xC0, 0xBE, 0xBD, 0xBB, 0xBA, 0xB8, 0xB7, 0xB5, 0xB4, 0xB2, 0xB1, 0xB0,
+    0xAE, 0xAD, 0xAB, 0xAA, 0xA9, 0xA7, 0xA6, 0xA4, 0xA3, 0xA2, 0xA0, 0x9F, 0x9E, 0x9C, 0x9B, 0x9A,
+    0x99, 0x97, 0x96, 0x95, 0x94, 0x92, 0x91, 0x90, 0x8F, 0x8D, 0x8C, 0x8B, 0x8A, 0x89, 0x87, 0x86,
+    0x85, 0x84, 0x83, 0x82, 0x81, 0x7F, 0x7E, 0x7D, 0x7C, 0x7B, 0x7A, 0x79, 0x78, 0x77, 0x75, 0x74,
+    0x73, 0x72, 0x71, 0x70, 0x6F, 0x6E, 0x6D, 0x6C, 0x6B, 0x6A, 0x69, 0x68, 0x67, 0x66, 0x65, 0x64,
+    0x63, 0x62, 0x61, 0x60, 0x5F, 0x5E, 0x5D, 0x5D, 0x5C, 0x5B, 0x5A, 0x59, 0x58, 0x57, 0x56, 0x55,
+    0x54, 0x53, 0x53, 0x52, 0x51, 0x50, 0x4F, 0x4E, 0x4D, 0x4D, 0x4C, 0x4B, 0x4A, 0x49, 0x48, 0x48,
+    0x47, 0x46, 0x45, 0x44, 0x43, 0x43, 0x42, 0x41, 0x40, 0x3F, 0x3F, 0x3E, 0x3D, 0x3C, 0x3C, 0x3B,
+    0x3A, 0x39, 0x39, 0x38, 0x37, 0x36, 0x36, 0x35, 0x34, 0x33, 0x33, 0x32, 0x31, 0x31, 0x30, 0x2F,
+    0x2E, 0x2E, 0x2D, 0x2C, 0x2C, 0x2B, 0x2A, 0x2A, 0x29, 0x28, 0x28, 0x27, 0x26, 0x26, 0x25, 0x24,
+    0x24, 0x23, 0x22, 0x22, 0x21, 0x20, 0x20, 0x1F, 0x1E, 0x1E, 0x1D, 0x1D, 0x1C, 0x1B, 0x1B, 0x1A,
+    0x19, 0x19, 0x18, 0x18, 0x17, 0x16, 0x16, 0x15, 0x15, 0x14, 0x14, 0x13, 0x12, 0x12, 0x11, 0x11,
+    0x10, 0x0F, 0x0F, 0x0E, 0x0E, 0x0D, 0x0D, 0x0C, 0x0C, 0x0B, 0x0A, 0x0A, 0x09, 0x09, 0x08, 0x08,
+    0x07, 0x07, 0x06, 0x06, 0x05, 0x05, 0x04, 0x04, 0x03, 0x03, 0x02, 0x02, 0x01, 0x01, 0x00, 0x00,
+    0x00,
+];
 
 #[derive(Default)]
 struct Vector3 {
@@ -29,7 +52,7 @@ struct Vector3_32 {
 	z: i32
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 struct Vector2 {
 	x: i16,
 	y: i16,
@@ -50,8 +73,8 @@ impl Vector2 {
 
 #[derive(Default)]
 struct Vector2_32 {
-	x: i32,
-	y: i32,
+	x: u32,
+	y: u32,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -137,6 +160,8 @@ struct GteRegisters {
 	mac1: i32,
 	mac2: i32,
 	mac3: i32,
+	mac0_unclamped: i64, // used for RTP
+	mac3_unclamped: i64,
 	// Count Leading-Zeroes/Ones (sign bits) (src/result)
 	lzcs: i32,
 	// ? control registers (cop2r32-63)
@@ -206,6 +231,8 @@ impl GteRegisters {
 			mac1: 0,
 			mac2: 0,
 			mac3: 0,
+			mac0_unclamped: 0,
+			mac3_unclamped: 0,
 			// Count Leading-Zeroes/Ones (sign bits) (src/result)
 			lzcs: 0,
 			// ? control registers (cop2r32-63)
@@ -394,8 +421,8 @@ impl GteRegisters {
 			21 => self.far_colour.r = write,
 			22 => self.far_colour.g = write,
 			23 => self.far_colour.b = write,
-			24 => self.screen_offset.x = write as i32,
-			25 => self.screen_offset.y = write as i32,
+			24 => self.screen_offset.x = write as u32,
+			25 => self.screen_offset.y = write as u32,
 			26 => self.h = write as u16,
 			27 => self.dqa = write as i16,
 			28 => self.dqb = write as i32,
@@ -480,6 +507,7 @@ impl Gte {
 		let instr = GteInstruction::from_raw(instr_raw);
 
 		match instr.opcode() {
+			0x01 => self.op_rtps(instr),
 			0x06 => self.op_nclip(),
 			0x0C => self.op_op(instr),
 			0x28 => self.op_sqr(instr),
@@ -511,6 +539,10 @@ impl Gte {
 
 	// mac overflows instead of saturating
 	fn clamp_mac(&mut self, mac_num: u32, set: i64, sf: u32) -> i32 {
+		if mac_num == 3 {
+			self.regs.mac3_unclamped = set;
+		}
+
 		if set > I44_MAX {
 			self.regs.flag |= (1 << MAC1_OVERFLOW) >> (mac_num - 1)
 		} else if set < I44_MIN {
@@ -521,6 +553,8 @@ impl Gte {
 	}
 
 	fn clamp_mac0(&mut self, set: i64) -> i32 {
+		self.regs.mac0_unclamped = set;
+
 		if set > (i32::MAX as i64) {
 			self.regs.flag |= 1 << 16;
 		} else if set < (i32::MIN as i64) {
@@ -548,7 +582,37 @@ impl Gte {
 		set as i16
 	}
 
-	fn clamp_otz(&mut self, set: i32) -> u16 {
+	fn clamp_ir0(&mut self, set: i64) -> i16 {
+		if set < 0 {
+			self.regs.flag |= 1 << IR0_SATURATED;
+
+			return 0;
+		} else if set > 0x1000 {
+			self.regs.flag |= 1 << IR0_SATURATED;
+
+			return 0x1000;
+		}
+
+		return set as i16;
+	}
+
+	// emulates a hardware bug in RTPx which sets the IR3 flag incorrectly
+	fn clamp_ir3_z(&mut self, set: i64, sf: u32, lm: bool) -> i16 {
+		// the IR3 saturated flag is set when sf=0 and MAC3 >> 12 overflows
+		let inverted_shift = (1 - sf) * 12;
+		let flag_mac3 = (set >> inverted_shift) as i32;
+
+		if !(-0x8000..0x7FFF).contains(&flag_mac3) {
+			self.regs.flag |= 1 << 22;
+		}
+
+		let clamp_min = if lm { 0 } else { -0x8000 };
+		
+		set.clamp(clamp_min, 0x7FFF) as i16
+
+	}
+
+	fn clamp_otz(&mut self, set: i64) -> u16 {
 		if set > 0xFFFF {
 			self.regs.flag |= 1 << 18;
 
@@ -574,6 +638,108 @@ impl Gte {
 		}
 
 		component as u8
+	}
+
+	fn clamp_sxy(&mut self, comp_num: i32, component: i32) -> i16 {
+		debug!("clamp SXY comp: 0x{component:X} {component}");
+
+		if component < -0x400 {
+			debug!("SXY: underflow 0x{component:X}");
+			self.regs.flag |= (1 << SX2_SATURATED) >> (comp_num - 1);
+
+			return -0x400;
+		} else if component > 0x3FF {
+			debug!("SXY: overflow 0x{component:X}");
+			self.regs.flag |= (1 << SX2_SATURATED) >> (comp_num - 1);
+
+			return 0x3FF;
+		}
+
+		component as i16
+	}
+
+	fn divide(&mut self, numerator: u16, denominator: u16) -> i32 {
+		if numerator >= denominator * 2 {
+			self.regs.flag |= 1 << DIVIDE_OVERFLOW;
+
+			return 0x1FFFF;
+		}
+
+		let zeros = denominator.leading_zeros() as i32;
+		let shift = zeros - 16;
+
+		let r1 = (i32::from(denominator) << shift) & 0x7FFF;
+		let r2 = (UNR_TABLE[((r1 + 0x40) >> 7) as usize] + 0x101) as i32;
+		let r3 = ((0x80 - (r2 * (r1 + 0x8000))) >> 8) & 0x1FFFF;
+
+		let reciprocal = (((r2 * r3) + 0x80) >> 8) as u32;
+		let res = (((reciprocal as u64) * (u64::from(numerator) << shift)) + 0x8000) >> 16;
+
+		return (res as u32).min(0x1FFFF) as i32;
+	}
+
+	fn op_rtps(&mut self, instr: GteInstruction) {
+		debug!("======== START RTPS ========");
+
+		self.regs.flag = 0;
+
+		self.regs.mac1 = self.clamp_mac(1, (i64::from(self.regs.translation_vec.x) << 12) 
+			+ (i64::from(self.regs.rot_matrix.m11) * i64::from(self.regs.v0.x))
+			+ (i64::from(self.regs.rot_matrix.m12) * i64::from(self.regs.v0.y))
+			+ (i64::from(self.regs.rot_matrix.m13) * i64::from(self.regs.v0.z)), 
+			instr.sf()
+		);
+		self.regs.mac2 = self.clamp_mac(2, (i64::from(self.regs.translation_vec.y) << 12) 
+			+ (i64::from(self.regs.rot_matrix.m21) * i64::from(self.regs.v0.x))
+			+ (i64::from(self.regs.rot_matrix.m22) * i64::from(self.regs.v0.y))
+			+ (i64::from(self.regs.rot_matrix.m23) * i64::from(self.regs.v0.z)), 
+			instr.sf()
+		);
+		self.regs.mac3 = self.clamp_mac(3, (i64::from(self.regs.translation_vec.z) << 12) 
+			+ (i64::from(self.regs.rot_matrix.m31) * i64::from(self.regs.v0.x))
+			+ (i64::from(self.regs.rot_matrix.m32) * i64::from(self.regs.v0.y))
+			+ (i64::from(self.regs.rot_matrix.m33) * i64::from(self.regs.v0.z)), 
+			instr.sf()
+		);
+
+		debug!("mac3: 0x{:X}, mac3_s: 0x{:X}", self.regs.mac3, self.regs.mac3_unclamped);
+
+		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1 as i64, instr.lm());
+		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2 as i64, instr.lm());
+		self.regs.ir3 = self.clamp_ir3_z(self.regs.mac3 as i64, instr.sf(), instr.lm());
+
+		// push to SZ FIFO
+		self.regs.sz0 = self.regs.sz1;
+		self.regs.sz1 = self.regs.sz2;
+		self.regs.sz2 = self.regs.sz3;
+		self.regs.sz3 = self.clamp_otz(self.regs.mac3_unclamped >> 12); // OTZ and SZ3 have the same limiter
+
+		debug!("divide: 0x{:X} / 0x{:X}", self.regs.h, self.regs.sz3);
+
+		let div = self.divide(self.regs.h, self.regs.sz3) as i64;
+
+		self.regs.sxy0 = self.regs.sxy1;
+		self.regs.sxy1 = self.regs.sxy2;
+		
+		debug!("OFX: 0x{:X} IR1: 0x{:X} div: 0x{:X}", self.regs.screen_offset.x, self.regs.ir1, div);
+
+		debug!("0x{div:X} * 0x{:X} + 0x{:X}", self.regs.ir1 as i64, self.regs.screen_offset.x as i64);
+
+		let sx = div * (self.regs.ir1 as i64) + (self.regs.screen_offset.x as i32 as i64);
+		self.clamp_mac0(sx);
+
+		let sy = div * (self.regs.ir2 as i64) + (self.regs.screen_offset.y as i32 as i64);
+		self.clamp_mac0(sy);
+
+		debug!("SX: 0x{sx:X} SY: 0x{sy:X}");
+		debug!("SX: 0x{:X} {} SY: 0x{:X} {}", (sx >> 16), (sx >> 16), (sy >> 16), (sy >> 16));
+
+		self.regs.sxy2.x = self.clamp_sxy(1, (sx >> 16) as i32);
+		self.regs.sxy2.y = self.clamp_sxy(2, (sy >> 16) as i32);
+
+		self.regs.mac0 = self.clamp_mac0(i64::from(self.regs.dqb) + (i64::from(self.regs.dqa) * i64::from(div)));
+		self.regs.ir0 = self.clamp_ir0(self.regs.mac0_unclamped >> 12);
+
 	}
 
 	fn op_sqr(&mut self, instr: GteInstruction) {
@@ -607,7 +773,7 @@ impl Gte {
 		let avg_z = i64::from(self.regs.zsf3) * (u32::from(self.regs.sz1) + u32::from(self.regs.sz2) + u32::from(self.regs.sz3)) as i64;
 
 		self.regs.mac0 = self.clamp_mac0(avg_z);
-		self.regs.otz = self.clamp_otz((avg_z >> 12) as i32);
+		self.regs.otz = self.clamp_otz((avg_z >> 12) as i64);
 	}
 
 	fn op_avsz4(&mut self) {
@@ -616,7 +782,7 @@ impl Gte {
 		let avg_z = i64::from(self.regs.zsf4) * (u32::from(self.regs.sz0) + u32::from(self.regs.sz1) + u32::from(self.regs.sz2) + u32::from(self.regs.sz3)) as i64;
 
 		self.regs.mac0 = self.clamp_mac0(avg_z);
-		self.regs.otz = self.clamp_otz((avg_z >> 12) as i32);
+		self.regs.otz = self.clamp_otz((avg_z >> 12) as i64);
 	}
 
 	// outer product is a mistranslation of cross product
