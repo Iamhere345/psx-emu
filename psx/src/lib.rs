@@ -189,6 +189,29 @@ impl PSXEmulator {
 		// Jump to the EXE entry point; execution can continue normally after this
 		self.cpu.pc = initial_pc;
 
+		//self.setup_amidog_logs();
+
+	}
+
+	#[allow(unused)]
+	fn setup_amidog_logs(&mut self) {
+		let args = ["console\0", "release\0"];
+        let arg_len = 2;
+        let mut len = 0;
+        
+		for i in 0..arg_len {
+			self.bus.write32(0x1F800004 + i * 4, 0x1F800044 + len, &mut self.scheduler);
+		
+			let n = args[i as usize].len();
+
+			for x in len..(len + n as u32) {
+				self.bus.write8(0x1F800044 + x, args[i as usize].as_bytes()[x as usize - len as usize], &mut self.scheduler);
+			}
+			
+			len = len + n as u32;
+		}
+		
+		self.bus.write32(0x1F800000, arg_len, &mut self.scheduler);
 	}
 
 }

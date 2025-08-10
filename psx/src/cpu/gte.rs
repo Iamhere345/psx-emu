@@ -31,7 +31,7 @@ const UNR_TABLE: [u32; 0x101] = [
     0x00,
 ];
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct Vector3 {
 	x: i16,
 	y: i16,
@@ -73,8 +73,8 @@ impl Vector2 {
 
 #[derive(Default)]
 struct Vector2_32 {
-	x: u32,
-	y: u32,
+	x: i32,
+	y: i32,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -126,9 +126,7 @@ struct Matrix3x3 {
 struct GteRegisters {
 	// ? data registers (cop2r0-31)
 	// vectors
-	v0: Vector3,
-	v1: Vector3,
-	v2: Vector3,
+	v: [Vector3; 3],
 	// colour
 	rgbc: Rgb,
 	// Average Z value (for Ordering Table)
@@ -197,9 +195,7 @@ impl GteRegisters {
 		Self {
 			// ? data registers (cop2r0-31)
 			// vectors
-			v0: Vector3::default(),
-			v1: Vector3::default(),
-			v2: Vector3::default(),
+			v: [Vector3::default(); 3],
 			// colour
 			rgbc: Rgb::default(),
 			// Average Z value (for Ordering Table)
@@ -266,12 +262,12 @@ impl GteRegisters {
 
 	fn read_data_register(&self, reg_index: u32) -> u32 {
 		let result = match reg_index {
-			0 => (self.v0.x as u16 as u32) | ((self.v0.y as u16 as u32) << 16),
-			1 => self.v0.z as i32 as u32,
-			2 => (self.v1.x as u16 as u32) | ((self.v1.y as u16 as u32) << 16),
-			3 => self.v1.z as u32,
-			4 => (self.v2.x as u16 as u32) | ((self.v2.y as u16 as u32) << 16),
-			5 => self.v2.z as u32,
+			0 => (self.v[0].x as u16 as u32) | ((self.v[0].y as u16 as u32) << 16),
+			1 => self.v[0].z as i32 as u32,
+			2 => (self.v[1].x as u16 as u32) | ((self.v[1].y as u16 as u32) << 16),
+			3 => self.v[1].z as u32,
+			4 => (self.v[2].x as u16 as u32) | ((self.v[2].y as u16 as u32) << 16),
+			5 => self.v[2].z as u32,
 			6 => self.rgbc.as_word(),
 			7 => self.otz as u32,
 			8 => self.ir0 as u32,
@@ -312,12 +308,12 @@ impl GteRegisters {
 		trace!("[{reg_index}] write 0x{write:X}");
 
 		match reg_index {
-			0 => self.v0.from_word(write),
-			1 => self.v0.z = write as i16,
-			2 => self.v1.from_word(write),
-			3 => self.v1.z = write as i16,
-			4 => self.v2.from_word(write),
-			5 => self.v2.z = write as i16,
+			0 => self.v[0].from_word(write),
+			1 => self.v[0].z = write as i16,
+			2 => self.v[1].from_word(write),
+			3 => self.v[1].z = write as i16,
+			4 => self.v[2].from_word(write),
+			5 => self.v[2].z = write as i16,
 			6 => self.rgbc = Rgb::from_word(write),
 			7 => self.otz = write as u16,
 			8 => self.ir0 = write as i16,
@@ -421,8 +417,8 @@ impl GteRegisters {
 			21 => self.far_colour.r = write,
 			22 => self.far_colour.g = write,
 			23 => self.far_colour.b = write,
-			24 => self.screen_offset.x = write as u32,
-			25 => self.screen_offset.y = write as u32,
+			24 => self.screen_offset.x = write as i32,
+			25 => self.screen_offset.y = write as i32,
 			26 => self.h = write as u16,
 			27 => self.dqa = write as i16,
 			28 => self.dqb = write as i32,
@@ -467,6 +463,7 @@ impl GteRegisters {
 	}
 }
 
+#[derive(Clone, Copy)]
 struct GteInstruction {
 	raw: u32
 }
@@ -513,6 +510,7 @@ impl Gte {
 			0x28 => self.op_sqr(instr),
 			0x2D => self.op_avsz3(),
 			0x2E => self.op_avsz4(),
+			0x30 => self.op_rtpt(instr),
 			0x3D => self.op_gpf(instr),
 			0x3E => self.op_gpl(instr),
 
@@ -549,7 +547,17 @@ impl Gte {
 			self.regs.flag |= (1 << MAC1_UNDERFLOW) >> (mac_num - 1)
 		}
 
-		(((set << 20) >> 20) >> (12 * u64::from(sf))) as u64 as i32
+		(((set << 20) >> 20) >> (12 * sf as u64)) as i32
+	}
+	
+	fn check_mac(&mut self, mac_num: u32, set: i64) -> i64 {
+		if set > I44_MAX {
+			self.regs.flag |= (1 << MAC1_OVERFLOW) >> (mac_num - 1)
+		} else if set < I44_MIN {
+			self.regs.flag |= (1 << MAC1_UNDERFLOW) >> (mac_num - 1)
+		}
+
+		(set << 20) >> 20
 	}
 
 	fn clamp_mac0(&mut self, set: i64) -> i32 {
@@ -564,7 +572,7 @@ impl Gte {
 		set as i32
 	}
 
-	fn clamp_ir(&mut self, ir_num: u32, set: i64, lm: bool) -> i16 {
+	fn clamp_ir(&mut self, ir_num: u32, set: i32, lm: bool) -> i16 {
 		if lm && set < 0 {
 			self.regs.flag |= (1 << IR1_SATURATED) >> (ir_num - 1);
 
@@ -582,7 +590,7 @@ impl Gte {
 		set as i16
 	}
 
-	fn clamp_ir0(&mut self, set: i64) -> i16 {
+	fn clamp_ir0(&mut self, set: i32) -> i16 {
 		if set < 0 {
 			self.regs.flag |= 1 << IR0_SATURATED;
 
@@ -597,7 +605,7 @@ impl Gte {
 	}
 
 	// emulates a hardware bug in RTPx which sets the IR3 flag incorrectly
-	fn clamp_ir3_z(&mut self, set: i64, sf: u32, lm: bool) -> i16 {
+	fn clamp_ir3_z(&mut self, set: i32, sf: u32, lm: bool) -> i16 {
 		// the IR3 saturated flag is set when sf=0 and MAC3 >> 12 overflows
 		let inverted_shift = (1 - sf) * 12;
 		let flag_mac3 = (set >> inverted_shift) as i32;
@@ -640,73 +648,75 @@ impl Gte {
 		component as u8
 	}
 
-	fn clamp_sxy(&mut self, comp_num: i32, component: i32) -> i16 {
-		debug!("clamp SXY comp: 0x{component:X} {component}");
+	fn clamp_sxy(&mut self, comp_num: i32, component: i64) -> i16 {
+		trace!("clamp SXY comp: 0x{component:X} {component}");
 
 		if component < -0x400 {
-			debug!("SXY: underflow 0x{component:X}");
+			trace!("SXY: underflow 0x{component:X}");
 			self.regs.flag |= (1 << SX2_SATURATED) >> (comp_num - 1);
 
 			return -0x400;
 		} else if component > 0x3FF {
-			debug!("SXY: overflow 0x{component:X}");
+			trace!("SXY: overflow 0x{component:X}");
 			self.regs.flag |= (1 << SX2_SATURATED) >> (comp_num - 1);
 
 			return 0x3FF;
 		}
 
-		component as i16
+		component as i32 as i16
 	}
 
-	fn divide(&mut self, numerator: u16, denominator: u16) -> i32 {
-		if numerator >= denominator * 2 {
+	// copy of fogstations copy of duckstations unr dvivision impl
+	fn divide(&mut self, lhs: u32, rhs: u32) -> u32 {
+		if lhs < rhs * 2 {
+			let shift = (rhs as u16).leading_zeros();
+			let lhs_shift = lhs << shift;
+			let rhs_shift = rhs << shift;
+
+			let divisor = rhs_shift | 0x8000;
+
+			let x: i32 = 0x101 + UNR_TABLE[(((divisor & 0x7FFF) + 0x40) >> 7) as usize] as i32;
+			let d: i32 = ((divisor as i32 * -x) + 0x80) >> 8;
+
+			let recip = ((x * (0x20000 + d) + 0x80) >> 8) as u32;
+
+			let result = ((lhs_shift as u64 * recip as u64) + 0x8000) >> 16;
+
+			return (result as u32).min(0x1FFFF);
+		} else {
 			self.regs.flag |= 1 << DIVIDE_OVERFLOW;
 
 			return 0x1FFFF;
 		}
-
-		let zeros = denominator.leading_zeros() as i32;
-		let shift = zeros - 16;
-
-		let r1 = (i32::from(denominator) << shift) & 0x7FFF;
-		let r2 = (UNR_TABLE[((r1 + 0x40) >> 7) as usize] + 0x101) as i32;
-		let r3 = ((0x80 - (r2 * (r1 + 0x8000))) >> 8) & 0x1FFFF;
-
-		let reciprocal = (((r2 * r3) + 0x80) >> 8) as u32;
-		let res = (((reciprocal as u64) * (u64::from(numerator) << shift)) + 0x8000) >> 16;
-
-		return (res as u32).min(0x1FFFF) as i32;
 	}
 
-	fn op_rtps(&mut self, instr: GteInstruction) {
-		debug!("======== START RTPS ========");
-
+	fn do_rtp(&mut self, instr: GteInstruction, vec_num: usize, depth_queue: bool) {
 		self.regs.flag = 0;
 
-		self.regs.mac1 = self.clamp_mac(1, (i64::from(self.regs.translation_vec.x) << 12) 
-			+ (i64::from(self.regs.rot_matrix.m11) * i64::from(self.regs.v0.x))
-			+ (i64::from(self.regs.rot_matrix.m12) * i64::from(self.regs.v0.y))
-			+ (i64::from(self.regs.rot_matrix.m13) * i64::from(self.regs.v0.z)), 
-			instr.sf()
-		);
-		self.regs.mac2 = self.clamp_mac(2, (i64::from(self.regs.translation_vec.y) << 12) 
-			+ (i64::from(self.regs.rot_matrix.m21) * i64::from(self.regs.v0.x))
-			+ (i64::from(self.regs.rot_matrix.m22) * i64::from(self.regs.v0.y))
-			+ (i64::from(self.regs.rot_matrix.m23) * i64::from(self.regs.v0.z)), 
-			instr.sf()
-		);
-		self.regs.mac3 = self.clamp_mac(3, (i64::from(self.regs.translation_vec.z) << 12) 
-			+ (i64::from(self.regs.rot_matrix.m31) * i64::from(self.regs.v0.x))
-			+ (i64::from(self.regs.rot_matrix.m32) * i64::from(self.regs.v0.y))
-			+ (i64::from(self.regs.rot_matrix.m33) * i64::from(self.regs.v0.z)), 
-			instr.sf()
-		);
+		self.regs.mac1 = {
+			let mut mac = self.check_mac(1,((self.regs.translation_vec.x as i64) << 12) + (self.regs.rot_matrix.m11 as i64 * self.regs.v[vec_num].x as i64));
+			mac =  self.check_mac(1, mac + (self.regs.rot_matrix.m12 as i64 * self.regs.v[vec_num].y as i64));
 
-		debug!("mac3: 0x{:X}, mac3_s: 0x{:X}", self.regs.mac3, self.regs.mac3_unclamped);
+			self.clamp_mac(1, mac + (self.regs.rot_matrix.m13 as i64 * self.regs.v[vec_num].z as i64), instr.sf())
+		};
+		self.regs.mac2 = {
+			let mut mac = self.check_mac(2,((self.regs.translation_vec.y as i64) << 12) + (self.regs.rot_matrix.m21 as i64 * self.regs.v[vec_num].x as i64));
+			mac =  self.check_mac(2, mac + (self.regs.rot_matrix.m22 as i64 * self.regs.v[vec_num].y as i64));
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1 as i64, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2 as i64, instr.lm());
-		self.regs.ir3 = self.clamp_ir3_z(self.regs.mac3 as i64, instr.sf(), instr.lm());
+			self.clamp_mac(2, mac + (self.regs.rot_matrix.m23 as i64 * self.regs.v[vec_num].z as i64), instr.sf())
+		};
+		self.regs.mac3 = {
+			let mut mac = self.check_mac(3,((self.regs.translation_vec.z as i64) << 12) + (self.regs.rot_matrix.m31 as i64 * self.regs.v[vec_num].x as i64));
+			mac =  self.check_mac(3, mac + (self.regs.rot_matrix.m32 as i64 * self.regs.v[vec_num].y as i64));
+
+			self.clamp_mac(3, mac + (self.regs.rot_matrix.m33 as i64 * self.regs.v[vec_num].z as i64), instr.sf())
+		};
+
+		trace!("mac3: 0x{:X}, mac3_s: 0x{:X}", self.regs.mac3, self.regs.mac3_unclamped);
+
+		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
+		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
+		self.regs.ir3 = self.clamp_ir3_z(self.regs.mac3, instr.sf(), instr.lm());
 
 		// push to SZ FIFO
 		self.regs.sz0 = self.regs.sz1;
@@ -714,16 +724,18 @@ impl Gte {
 		self.regs.sz2 = self.regs.sz3;
 		self.regs.sz3 = self.clamp_otz(self.regs.mac3_unclamped >> 12); // OTZ and SZ3 have the same limiter
 
-		debug!("divide: 0x{:X} / 0x{:X}", self.regs.h, self.regs.sz3);
+		trace!("divide: 0x{:X} / 0x{:X}", self.regs.h, self.regs.sz3);
 
-		let div = self.divide(self.regs.h, self.regs.sz3) as i64;
+		let div = self.divide(self.regs.h as u32, self.regs.sz3 as u32) as i64;
 
 		self.regs.sxy0 = self.regs.sxy1;
 		self.regs.sxy1 = self.regs.sxy2;
 		
-		debug!("OFX: 0x{:X} IR1: 0x{:X} div: 0x{:X}", self.regs.screen_offset.x, self.regs.ir1, div);
+		trace!("OFX: 0x{:X} IR1: 0x{:X} div: 0x{:X}", self.regs.screen_offset.x, self.regs.ir1, div);
+		trace!("OFY: 0x{:X} IR2: 0x{:X}", self.regs.screen_offset.y, self.regs.ir1);
 
-		debug!("0x{div:X} * 0x{:X} + 0x{:X}", self.regs.ir1 as i64, self.regs.screen_offset.x as i64);
+		trace!("SX: 0x{div:X} * 0x{:X} + 0x{:X}", self.regs.ir1 as i64, self.regs.screen_offset.x as i64);
+		trace!("SY: 0x{div:X} * 0x{:X} + 0x{:X}", self.regs.ir2 as i64, self.regs.screen_offset.y as i64);
 
 		let sx = div * (self.regs.ir1 as i64) + (self.regs.screen_offset.x as i32 as i64);
 		self.clamp_mac0(sx);
@@ -731,15 +743,31 @@ impl Gte {
 		let sy = div * (self.regs.ir2 as i64) + (self.regs.screen_offset.y as i32 as i64);
 		self.clamp_mac0(sy);
 
-		debug!("SX: 0x{sx:X} SY: 0x{sy:X}");
-		debug!("SX: 0x{:X} {} SY: 0x{:X} {}", (sx >> 16), (sx >> 16), (sy >> 16), (sy >> 16));
+		trace!("SX: 0x{sx:X} SY: 0x{sy:X}");
+		trace!("SX: 0x{:X} {} SY: 0x{:X} {}", (sx >> 16), (sx >> 16), (sy >> 16), (sy >> 16));
 
-		self.regs.sxy2.x = self.clamp_sxy(1, (sx >> 16) as i32);
-		self.regs.sxy2.y = self.clamp_sxy(2, (sy >> 16) as i32);
+		self.regs.sxy2.x = self.clamp_sxy(1, sx >> 16);
+		self.regs.sxy2.y = self.clamp_sxy(2, sy >> 16);
 
-		self.regs.mac0 = self.clamp_mac0(i64::from(self.regs.dqb) + (i64::from(self.regs.dqa) * i64::from(div)));
-		self.regs.ir0 = self.clamp_ir0(self.regs.mac0_unclamped >> 12);
+		if depth_queue {
+			self.regs.mac0 = self.clamp_mac0(self.regs.dqb as i64 + (self.regs.dqa as i64 * div));
+			self.regs.ir0 = self.clamp_ir0((self.regs.mac0_unclamped >> 12) as i32);
+		}
+	}
 
+	fn op_rtps(&mut self, instr: GteInstruction) {
+		trace!("======== START RTPS ========");
+
+		self.regs.flag = 0;
+		self.do_rtp(instr, 0, true);
+	}
+
+	fn op_rtpt(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.do_rtp(instr, 0, false);
+		self.do_rtp(instr, 1, false);
+		self.do_rtp(instr, 2, true);
 	}
 
 	fn op_sqr(&mut self, instr: GteInstruction) {
@@ -749,9 +777,9 @@ impl Gte {
 		self.regs.mac2 = self.clamp_mac(2, i64::from(self.regs.ir2).pow(2), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, i64::from(self.regs.ir3).pow(2), instr.sf());
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1 as i64, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2 as i64, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3 as i64, instr.lm());
+		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
+		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
+		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
 	}
 
 	fn op_nclip(&mut self) {
@@ -793,9 +821,9 @@ impl Gte {
 		self.regs.mac2 = self.clamp_mac(2, (i64::from(self.regs.rot_matrix.m33) * i64::from(self.regs.ir1)) - (i64::from(self.regs.rot_matrix.m11) * i64::from(self.regs.ir3)), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, (i64::from(self.regs.rot_matrix.m11) * i64::from(self.regs.ir2)) - (i64::from(self.regs.rot_matrix.m22) * i64::from(self.regs.ir1)), instr.sf());
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1 as i64, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2 as i64, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3 as i64, instr.lm());
+		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
+		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
+		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
 	}
 
 	fn op_gpf(&mut self, instr: GteInstruction) {
@@ -805,9 +833,9 @@ impl Gte {
 		self.regs.mac2 = self.clamp_mac(2, i64::from(self.regs.ir0) * i64::from(self.regs.ir2), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, i64::from(self.regs.ir0) * i64::from(self.regs.ir3), instr.sf());
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1 as i64, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2 as i64, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3 as i64, instr.lm());
+		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
+		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
+		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
 
 		// push result to colour FIFO
 		self.regs.rgb0 = self.regs.rgb1;
@@ -826,9 +854,9 @@ impl Gte {
 		self.regs.mac2 = self.clamp_mac(2, (i64::from(self.regs.mac2) << (instr.sf() * 12)) + (i64::from(self.regs.ir0) * i64::from(self.regs.ir2)), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, (i64::from(self.regs.mac3) << (instr.sf() * 12)) + (i64::from(self.regs.ir0) * i64::from(self.regs.ir3)), instr.sf());
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1 as i64, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2 as i64, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3 as i64, instr.lm());
+		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
+		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
+		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
 
 		// push result to colour FIFO
 		self.regs.rgb0 = self.regs.rgb1;
