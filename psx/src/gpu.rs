@@ -1131,19 +1131,26 @@ impl Gpu {
                 	continue;
             	}
 
-				let draw_colour = if cmd.textured {
-					let colour = self.sample_texture(Vertex::new(cmd.position.tex_x + (x - min_x), cmd.position.tex_y + (y - min_y)), cmd.clut);
+				let (draw_colour, semi_transparent) = if cmd.textured {
+					let tex_colour_u16 = self.sample_texture(Vertex::new(cmd.position.tex_x + (x - min_x), cmd.position.tex_y + (y - min_y)), cmd.clut);
+					let tex_colour =  Colour::rgb555_to_rgb888(tex_colour_u16);
 
-					if colour == 0 {
+					if tex_colour_u16 == 0 {
 						continue;
 					}
 
-					colour
+					let semi_transparent = cmd.semi_transparent && tex_colour_u16 & 0x8000 != 0;
+
+					if !cmd.raw_texture {
+						(apply_modulation(tex_colour, cmd.colour), semi_transparent)
+					} else {
+						(tex_colour, semi_transparent)
+					}
 				} else {
-					u16::from(cmd.colour.r) | (u16::from(cmd.colour.g) << 5) | (u16::from(cmd.colour.b) << 10)
+					(cmd.colour, cmd.semi_transparent)
 				};
 
-				self.draw_pixel_15bit(draw_colour, x as u32, y as u32, cmd.semi_transparent);
+				self.draw_pixel_15bit(u16::from(draw_colour.truncate_to_15bit()), x as u32, y as u32, semi_transparent);
 			}
 		}
 	}
@@ -1286,10 +1293,10 @@ impl Gpu {
 						// bit 15 of the texture colour specifies if this pixel should be semi-transparent
 						let semi_transparent = cmd.semi_transparent && tex_colour_u16 & 0x8000 != 0;
 
-						if cmd.raw_texture {
-							(tex_colour, semi_transparent)
-						} else {
+						if !cmd.raw_texture {
 							(apply_modulation(tex_colour, shaded_colour), semi_transparent)
+						} else {
+							(tex_colour, semi_transparent)
 						}
 
 					} else {

@@ -105,9 +105,9 @@ impl Rgb {
 
 #[derive(Default)]
 struct Rgb32 {
-	r: u32,
-	g: u32,
-	b: u32
+	r: i32,
+	g: i32,
+	b: i32
 }
 
 #[derive(Default)]
@@ -147,9 +147,7 @@ struct GteRegisters {
 	sz2: u16,
 	sz3: u16,
 	// Color CRGB-code/color FIFO (3 stages)
-	rgb0: Rgb,
-	rgb1: Rgb,
-	rgb2: Rgb,
+	rgb: [Rgb; 3],
 	// Prohibited
 	res1: u32,
 	// 32bit Maths Accumulators (Value)
@@ -216,9 +214,7 @@ impl GteRegisters {
 			sz2: 0,
 			sz3: 0,
 			// Color CRGB-code/color FIFO (3 stages)
-			rgb0: Rgb::default(),
-			rgb1: Rgb::default(),
-			rgb2: Rgb::default(),
+			rgb: [Rgb::default(); 3],
 			// Prohibited
 			res1: 0,
 			// 32bit Maths Accumulators (Value)
@@ -282,9 +278,9 @@ impl GteRegisters {
 			17 => self.sz1 as u32,
 			18 => self.sz2 as u32,
 			19 => self.sz3 as u32,
-			20 => self.rgb0.as_word(),
-			21 => self.rgb1.as_word(),
-			22 => self.rgb2.as_word(),
+			20 => self.rgb[0].as_word(),
+			21 => self.rgb[1].as_word(),
+			22 => self.rgb[2].as_word(),
 			23 => self.res1,
 			24 => self.mac0 as u32,
 			25 => self.mac1 as u32,
@@ -328,9 +324,9 @@ impl GteRegisters {
 			17 => self.sz1 = write as u16,
 			18 => self.sz2 = write as u16,
 			19 => self.sz3 = write as u16,
-			20 => self.rgb0 = Rgb::from_word(write),
-			21 => self.rgb1 = Rgb::from_word(write),
-			22 => self.rgb2 = Rgb::from_word(write),
+			20 => self.rgb[0] = Rgb::from_word(write),
+			21 => self.rgb[1] = Rgb::from_word(write),
+			22 => self.rgb[2] = Rgb::from_word(write),
 			23 => self.res1 = write,
 			24 => self.mac0 = write as i32,
 			25 => self.mac1 = write as i32,
@@ -360,17 +356,17 @@ impl GteRegisters {
 			10 => (self.light_src_matrix.m22 as u16 as u32) | ((self.light_src_matrix.m23 as u16 as u32) << 16),
 			11 => (self.light_src_matrix.m31 as u16 as u32) | ((self.light_src_matrix.m32 as u16 as u32) << 16),
 			12 => self.light_src_matrix.m33 as u32,
-			13 => self.bg_colour.r,
-			14 => self.bg_colour.g,
-			15 => self.bg_colour.b,
+			13 => self.bg_colour.r as u32,
+			14 => self.bg_colour.g as u32,
+			15 => self.bg_colour.b as u32,
 			16 => (self.light_colour_matrix.m11 as u16 as u32) | ((self.light_colour_matrix.m12 as u16 as u32) << 16),
 			17 => (self.light_colour_matrix.m13 as u16 as u32) | ((self.light_colour_matrix.m21 as u16 as u32) << 16),
 			18 => (self.light_colour_matrix.m22 as u16 as u32) | ((self.light_colour_matrix.m23 as u16 as u32) << 16),
 			19 => (self.light_colour_matrix.m31 as u16 as u32) | ((self.light_colour_matrix.m32 as u16 as u32) << 16),
 			20 => self.light_colour_matrix.m33 as u32,
-			21 => self.far_colour.r,
-			22 => self.far_colour.g,
-			23 => self.far_colour.b,
+			21 => self.far_colour.r as u32,
+			22 => self.far_colour.g as u32,
+			23 => self.far_colour.b as u32,
 			24 => self.screen_offset.x as u32,
 			25 => self.screen_offset.y as u32,
 			26 => self.h as i16 as i32 as u32,
@@ -406,17 +402,17 @@ impl GteRegisters {
 			10 => { self.light_src_matrix.m22 = write as i16; self.light_src_matrix.m23 = (write >> 16) as i16; },
 			11 => { self.light_src_matrix.m31 = write as i16; self.light_src_matrix.m32 = (write >> 16) as i16; },
 			12 => self.light_src_matrix.m33 = write as i16,
-			13 => self.bg_colour.r = write,
-			14 => self.bg_colour.g = write,
-			15 => self.bg_colour.b = write,
+			13 => self.bg_colour.r = write as i32,
+			14 => self.bg_colour.g = write as i32,
+			15 => self.bg_colour.b = write as i32,
 			16 => { self.light_colour_matrix.m11 = write as i16; self.light_colour_matrix.m12 = (write >> 16) as i16; },
 			17 => { self.light_colour_matrix.m13 = write as i16; self.light_colour_matrix.m21 = (write >> 16) as i16; },
 			18 => { self.light_colour_matrix.m22 = write as i16; self.light_colour_matrix.m23 = (write >> 16) as i16; },
 			19 => { self.light_colour_matrix.m31 = write as i16; self.light_colour_matrix.m32 = (write >> 16) as i16; },
 			20 => self.light_colour_matrix.m33 = write as i16,
-			21 => self.far_colour.r = write,
-			22 => self.far_colour.g = write,
-			23 => self.far_colour.b = write,
+			21 => self.far_colour.r = write as i32,
+			22 => self.far_colour.g = write as i32,
+			23 => self.far_colour.b = write as i32,
 			24 => self.screen_offset.x = write as i32,
 			25 => self.screen_offset.y = write as i32,
 			26 => self.h = write as u16,
@@ -507,14 +503,17 @@ impl Gte {
 			0x01 => self.op_rtps(instr),
 			0x06 => self.op_nclip(),
 			0x0C => self.op_op(instr),
+			0x10 => self.op_dpcs(instr),
+			0x11 => self.op_intpl(instr),
 			0x28 => self.op_sqr(instr),
+			0x2A => self.op_dpct(instr),
 			0x2D => self.op_avsz3(),
 			0x2E => self.op_avsz4(),
 			0x30 => self.op_rtpt(instr),
 			0x3D => self.op_gpf(instr),
 			0x3E => self.op_gpl(instr),
 
-			_ => {},//unimplemented!("GTE instruction 0x{:X}", instr.opcode())
+			_ => {}//unimplemented!("GTE instruction 0x{:X}", instr.opcode())
 		}
 
 	}
@@ -542,9 +541,9 @@ impl Gte {
 		}
 
 		if set > I44_MAX {
-			self.regs.flag |= (1 << MAC1_OVERFLOW) >> (mac_num - 1)
+			self.regs.flag |= (1 << MAC1_OVERFLOW) >> (mac_num - 1);
 		} else if set < I44_MIN {
-			self.regs.flag |= (1 << MAC1_UNDERFLOW) >> (mac_num - 1)
+			self.regs.flag |= (1 << MAC1_UNDERFLOW) >> (mac_num - 1);
 		}
 
 		(((set << 20) >> 20) >> (12 * sf as u64)) as i32
@@ -552,9 +551,9 @@ impl Gte {
 	
 	fn check_mac(&mut self, mac_num: u32, set: i64) -> i64 {
 		if set > I44_MAX {
-			self.regs.flag |= (1 << MAC1_OVERFLOW) >> (mac_num - 1)
+			self.regs.flag |= (1 << MAC1_OVERFLOW) >> (mac_num - 1);
 		} else if set < I44_MIN {
-			self.regs.flag |= (1 << MAC1_UNDERFLOW) >> (mac_num - 1)
+			self.regs.flag |= (1 << MAC1_UNDERFLOW) >> (mac_num - 1);
 		}
 
 		(set << 20) >> 20
@@ -755,6 +754,43 @@ impl Gte {
 		}
 	}
 
+	fn interp_far_colour(&mut self, instr: GteInstruction, m1: u64, m2: u64, m3: u64) {
+		let mac1 = self.clamp_mac(1, (((self.regs.far_colour.r as u64) << 12) - m1) as i64, instr.sf());
+		let mac2 = self.clamp_mac(2, (((self.regs.far_colour.g as u64) << 12) - m2) as i64, instr.sf());
+		let mac3 = self.clamp_mac(3, (((self.regs.far_colour.b as u64) << 12) - m3) as i64, instr.sf());
+
+		// saturation always behaves as if lm=0 for this step
+		let ir1 = self.clamp_ir(1, mac1, false) as i64;
+		let ir2 = self.clamp_ir(2, mac2, false) as i64;
+		let ir3 = self.clamp_ir(3, mac3, false) as i64;
+
+		self.regs.mac1 = self.clamp_mac(1, (m1 as i64) + ((self.regs.ir0 as i64) * ir1), instr.sf());
+		self.regs.mac2 = self.clamp_mac(2, (m2 as i64) + ((self.regs.ir0 as i64) * ir2), instr.sf());
+		self.regs.mac3 = self.clamp_mac(3, (m3 as i64) + ((self.regs.ir0 as i64) * ir3), instr.sf());
+
+		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
+		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
+		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
+
+		// push colour FIFO
+		self.regs.rgb[0] = self.regs.rgb[1];
+		self.regs.rgb[1] = self.regs.rgb[2];
+		self.regs.rgb[2].c = self.regs.rgbc.c;
+
+		self.regs.rgb[2].r = self.clamp_rgb_component(1, self.regs.mac1 >> 4);
+		self.regs.rgb[2].g = self.clamp_rgb_component(2, self.regs.mac2 >> 4);
+		self.regs.rgb[2].b = self.clamp_rgb_component(3, self.regs.mac3 >> 4);
+	}
+
+	fn do_depth_queue(&mut self, instr: GteInstruction, rgb: Rgb) {
+		self.interp_far_colour(
+			instr, 
+			(rgb.r as u64) << 16, 
+			(rgb.g as u64) << 16, 
+			(rgb.b as u64) << 16, 
+		);
+	}
+
 	fn op_rtps(&mut self, instr: GteInstruction) {
 		trace!("======== START RTPS ========");
 
@@ -838,13 +874,13 @@ impl Gte {
 		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
 
 		// push result to colour FIFO
-		self.regs.rgb0 = self.regs.rgb1;
-		self.regs.rgb1 = self.regs.rgb2;
+		self.regs.rgb[0] = self.regs.rgb[1];
+		self.regs.rgb[1] = self.regs.rgb[2];
 		
-		self.regs.rgb2.r = self.clamp_rgb_component(1, self.regs.mac1 >> 4);
-		self.regs.rgb2.g = self.clamp_rgb_component(2, self.regs.mac2 >> 4);
-		self.regs.rgb2.b = self.clamp_rgb_component(3, self.regs.mac3 >> 4);
-		self.regs.rgb2.c = self.regs.rgbc.c;
+		self.regs.rgb[2].r = self.clamp_rgb_component(1, self.regs.mac1 >> 4);
+		self.regs.rgb[2].g = self.clamp_rgb_component(2, self.regs.mac2 >> 4);
+		self.regs.rgb[2].b = self.clamp_rgb_component(3, self.regs.mac3 >> 4);
+		self.regs.rgb[2].c = self.regs.rgbc.c;
 	}
 
 	fn op_gpl(&mut self, instr: GteInstruction) {
@@ -859,12 +895,37 @@ impl Gte {
 		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
 
 		// push result to colour FIFO
-		self.regs.rgb0 = self.regs.rgb1;
-		self.regs.rgb1 = self.regs.rgb2;
+		self.regs.rgb[0] = self.regs.rgb[1];
+		self.regs.rgb[1] = self.regs.rgb[2];
 		
-		self.regs.rgb2.r = self.clamp_rgb_component(1, self.regs.mac1 >> 4);
-		self.regs.rgb2.g = self.clamp_rgb_component(2, self.regs.mac2 >> 4);
-		self.regs.rgb2.b = self.clamp_rgb_component(3, self.regs.mac3 >> 4);
-		self.regs.rgb2.c = self.regs.rgbc.c;
+		self.regs.rgb[2].r = self.clamp_rgb_component(1, self.regs.mac1 >> 4);
+		self.regs.rgb[2].g = self.clamp_rgb_component(2, self.regs.mac2 >> 4);
+		self.regs.rgb[2].b = self.clamp_rgb_component(3, self.regs.mac3 >> 4);
+		self.regs.rgb[2].c = self.regs.rgbc.c;
 	}
+
+	fn op_dpcs(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.do_depth_queue(instr, self.regs.rgbc);
+	}
+
+	fn op_dpct(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		for _ in  0..3 {
+			self.do_depth_queue(instr, self.regs.rgb[0]);
+		}
+	}
+
+	fn op_intpl(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.interp_far_colour(instr, 
+			(self.regs.ir1 as u64) << 12, 
+			(self.regs.ir2 as u64) << 12, 
+			(self.regs.ir3 as u64) << 12, 
+		);
+	}
+
 }
