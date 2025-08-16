@@ -45,7 +45,7 @@ impl Vector3 {
 	}
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct Vector3_32 {
 	x: i32,
 	y: i32,
@@ -103,14 +103,7 @@ impl Rgb {
 	}
 }
 
-#[derive(Default)]
-struct Rgb32 {
-	r: i32,
-	g: i32,
-	b: i32
-}
-
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct Matrix3x3 {
 	m11: i16,
 	m12: i16,
@@ -168,11 +161,11 @@ struct GteRegisters {
 	// Light source matrix (3x3)
 	light_src_matrix: Matrix3x3,
 	// Background color (R,G,B)
-	bg_colour: Rgb32,
+	bg_colour: Vector3_32,
 	// Light color matrix source (3x3)
 	light_colour_matrix: Matrix3x3,
 	// Far color (R,G,B)
-	far_colour: Rgb32,
+	far_colour: Vector3_32,
 	// Screen offset (X,Y)
 	screen_offset: Vector2_32,
 	// Projection plane distance
@@ -235,11 +228,11 @@ impl GteRegisters {
 			// Light source matrix (3x3)
 			light_src_matrix: Matrix3x3::default(),
 			// Background color (R,G,B)
-			bg_colour: Rgb32::default(),
+			bg_colour: Vector3_32::default(),
 			// Light color matrix source (3x3)
 			light_colour_matrix: Matrix3x3::default(),
 			// Far color (R,G,B)
-			far_colour: Rgb32::default(),
+			far_colour: Vector3_32::default(),
 			// Screen offset (X,Y)
 			screen_offset: Vector2_32::default(),
 			// Projection plane distance
@@ -356,17 +349,17 @@ impl GteRegisters {
 			10 => (self.light_src_matrix.m22 as u16 as u32) | ((self.light_src_matrix.m23 as u16 as u32) << 16),
 			11 => (self.light_src_matrix.m31 as u16 as u32) | ((self.light_src_matrix.m32 as u16 as u32) << 16),
 			12 => self.light_src_matrix.m33 as u32,
-			13 => self.bg_colour.r as u32,
-			14 => self.bg_colour.g as u32,
-			15 => self.bg_colour.b as u32,
+			13 => self.bg_colour.x as u32,
+			14 => self.bg_colour.y as u32,
+			15 => self.bg_colour.z as u32,
 			16 => (self.light_colour_matrix.m11 as u16 as u32) | ((self.light_colour_matrix.m12 as u16 as u32) << 16),
 			17 => (self.light_colour_matrix.m13 as u16 as u32) | ((self.light_colour_matrix.m21 as u16 as u32) << 16),
 			18 => (self.light_colour_matrix.m22 as u16 as u32) | ((self.light_colour_matrix.m23 as u16 as u32) << 16),
 			19 => (self.light_colour_matrix.m31 as u16 as u32) | ((self.light_colour_matrix.m32 as u16 as u32) << 16),
 			20 => self.light_colour_matrix.m33 as u32,
-			21 => self.far_colour.r as u32,
-			22 => self.far_colour.g as u32,
-			23 => self.far_colour.b as u32,
+			21 => self.far_colour.x as u32,
+			22 => self.far_colour.y as u32,
+			23 => self.far_colour.z as u32,
 			24 => self.screen_offset.x as u32,
 			25 => self.screen_offset.y as u32,
 			26 => self.h as i16 as i32 as u32,
@@ -402,17 +395,17 @@ impl GteRegisters {
 			10 => { self.light_src_matrix.m22 = write as i16; self.light_src_matrix.m23 = (write >> 16) as i16; },
 			11 => { self.light_src_matrix.m31 = write as i16; self.light_src_matrix.m32 = (write >> 16) as i16; },
 			12 => self.light_src_matrix.m33 = write as i16,
-			13 => self.bg_colour.r = write as i32,
-			14 => self.bg_colour.g = write as i32,
-			15 => self.bg_colour.b = write as i32,
+			13 => self.bg_colour.x = write as i32,
+			14 => self.bg_colour.y = write as i32,
+			15 => self.bg_colour.z = write as i32,
 			16 => { self.light_colour_matrix.m11 = write as i16; self.light_colour_matrix.m12 = (write >> 16) as i16; },
 			17 => { self.light_colour_matrix.m13 = write as i16; self.light_colour_matrix.m21 = (write >> 16) as i16; },
 			18 => { self.light_colour_matrix.m22 = write as i16; self.light_colour_matrix.m23 = (write >> 16) as i16; },
 			19 => { self.light_colour_matrix.m31 = write as i16; self.light_colour_matrix.m32 = (write >> 16) as i16; },
 			20 => self.light_colour_matrix.m33 = write as i16,
-			21 => self.far_colour.r = write as i32,
-			22 => self.far_colour.g = write as i32,
-			23 => self.far_colour.b = write as i32,
+			21 => self.far_colour.x = write as i32,
+			22 => self.far_colour.y = write as i32,
+			23 => self.far_colour.z = write as i32,
 			24 => self.screen_offset.x = write as i32,
 			25 => self.screen_offset.y = write as i32,
 			26 => self.h = write as u16,
@@ -482,6 +475,21 @@ impl GteInstruction {
 	fn lm(&self) -> bool {
 		(self.raw >> 10) & 1 != 0
 	}
+
+	// MVMVA multiply matrix
+	fn mx(&self) -> u32 {
+		(self.raw >> 17) & 3
+	}
+
+	// MVMVA multiply vector
+	fn vx(&self) -> u32 {
+		(self.raw >> 15) & 3
+	}
+
+	// MVMVA translation vector
+	fn tx(&self) -> u32 {
+		(self.raw >> 13) & 3
+	}
 }
 
 pub struct Gte {
@@ -505,6 +513,7 @@ impl Gte {
 			0x0C => self.op_op(instr),
 			0x10 => self.op_dpcs(instr),
 			0x11 => self.op_intpl(instr),
+			0x12 => self.op_mvmva(instr),
 			0x28 => self.op_sqr(instr),
 			0x2A => self.op_dpct(instr),
 			0x2D => self.op_avsz3(),
@@ -755,9 +764,9 @@ impl Gte {
 	}
 
 	fn interp_far_colour(&mut self, instr: GteInstruction, m1: u64, m2: u64, m3: u64) {
-		let mac1 = self.clamp_mac(1, (((self.regs.far_colour.r as u64) << 12) - m1) as i64, instr.sf());
-		let mac2 = self.clamp_mac(2, (((self.regs.far_colour.g as u64) << 12) - m2) as i64, instr.sf());
-		let mac3 = self.clamp_mac(3, (((self.regs.far_colour.b as u64) << 12) - m3) as i64, instr.sf());
+		let mac1 = self.clamp_mac(1, (((self.regs.far_colour.x as u64) << 12) - m1) as i64, instr.sf());
+		let mac2 = self.clamp_mac(2, (((self.regs.far_colour.y as u64) << 12) - m2) as i64, instr.sf());
+		let mac3 = self.clamp_mac(3, (((self.regs.far_colour.z as u64) << 12) - m3) as i64, instr.sf());
 
 		// saturation always behaves as if lm=0 for this step
 		let ir1 = self.clamp_ir(1, mac1, false) as i64;
@@ -926,6 +935,100 @@ impl Gte {
 			(self.regs.ir2 as u64) << 12, 
 			(self.regs.ir3 as u64) << 12, 
 		);
+	}
+
+	fn op_mvmva(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		let matrix = match instr.mx() {
+			0 => self.regs.rot_matrix,
+			1 => self.regs.light_src_matrix,
+			2 => self.regs.light_colour_matrix,
+			// mx=3 is reserved (returns garbage matrix)
+			3 => Matrix3x3 {
+				m11: -(i16::from(self.regs.rgbc.r) << 4),
+				m12: (i16::from(self.regs.rgbc.r) << 4),
+				m13: self.regs.ir0,
+				m21: self.regs.rot_matrix.m13,
+				m22: self.regs.rot_matrix.m13,
+				m23: self.regs.rot_matrix.m13,
+				m31: self.regs.rot_matrix.m22,
+				m32: self.regs.rot_matrix.m22,
+				m33: self.regs.rot_matrix.m22,
+			},
+
+			_ => unreachable!(),
+		};
+
+		let vector = match instr.vx() {
+			0 => self.regs.v[0],
+			1 => self.regs.v[1],
+			2 => self.regs.v[2],
+			// vx=3 selects [IR1, IR2, IR3] as the vector
+			3 => Vector3 { x: self.regs.ir1, y: self.regs.ir2, z: self.regs.ir3 },
+
+			_ => unreachable!()
+		};
+
+		let tr_vector =  match instr.tx() {
+			0 => self.regs.translation_vec,
+			1 => self.regs.bg_colour,
+			2 => self.regs.far_colour,
+			// selecting tx=3 uses an empty vector (i think)
+			3 => Vector3_32 { x: 0, y: 0, z: 0 },
+
+			_ => unreachable!()
+		};
+
+		// selecting tx=2 has a hardware bug where the results aren't calculated correctly
+		if instr.tx() == 2 {
+			// bug: the first part of the equation is not included in the final result, however flags are still calculated as normal
+			self.regs.mac1 = {
+				let m_vy = self.check_mac(1, matrix.m12 as i64 * vector.y as i64);
+				self.clamp_mac(1, m_vy + (matrix.m13 as i64 * vector.z as i64), instr.sf())
+			};
+			self.regs.mac2 = {
+				let m_vy = self.check_mac(2, matrix.m22 as i64 * vector.y as i64);
+				self.clamp_mac(2, m_vy + (matrix.m23 as i64 * vector.z as i64), instr.sf())
+			};
+			self.regs.mac3 = {
+				let m_vy = self.check_mac(3, matrix.m32 as i64 * vector.y as i64);
+				self.clamp_mac(3, m_vy + (matrix.m33 as i64 * vector.z as i64), instr.sf())
+			};
+
+			// set flags for missing part of calculation
+			let mac1 = self.clamp_mac(1, ((tr_vector.x as i64) << 12) + (matrix.m11 as i64 * vector.x as i64), instr.sf());
+			let mac2 = self.clamp_mac(2, ((tr_vector.y as i64) << 12) + (matrix.m21 as i64 * vector.x as i64), instr.sf());
+			let mac3 = self.clamp_mac(3, ((tr_vector.z as i64) << 12) + (matrix.m31 as i64 * vector.x as i64), instr.sf());
+
+			self.clamp_ir(1, mac1, instr.lm());
+			self.clamp_ir(2, mac2, instr.lm());
+			self.clamp_ir(3, mac3, instr.lm());
+
+		} else {
+			self.regs.mac1 = {
+				let mut mac = self.check_mac(1, (tr_vector.x as i64) << 12) + (matrix.m11 as i64 * vector.x as i64);
+				mac = self.check_mac(1, mac + (matrix.m12 as i64 * vector.y as i64));
+
+				self.clamp_mac(1, mac + (matrix.m13 as i64 * vector.z as i64), instr.sf())
+			};
+			self.regs.mac2 = {
+				let mut mac = self.check_mac(2, (tr_vector.y as i64) << 12) + (matrix.m21 as i64 * vector.x as i64);
+				mac = self.check_mac(2, mac + (matrix.m22 as i64 * vector.y as i64));
+
+				self.clamp_mac(2, mac + (matrix.m23 as i64 * vector.z as i64), instr.sf())
+			};
+			self.regs.mac3 = {
+				let mut mac = self.check_mac(3, (tr_vector.z as i64) << 12) + (matrix.m31 as i64 * vector.x as i64);
+				mac = self.check_mac(3, mac + (matrix.m32 as i64 * vector.y as i64));
+
+				self.clamp_mac(3, mac + (matrix.m33 as i64 * vector.z as i64), instr.sf())
+			};
+		}
+
+		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
+		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
+		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
 	}
 
 }
