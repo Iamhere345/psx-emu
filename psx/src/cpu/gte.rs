@@ -514,6 +514,13 @@ impl Gte {
 			0x10 => self.op_dpcs(instr),
 			0x11 => self.op_intpl(instr),
 			0x12 => self.op_mvmva(instr),
+			0x13 => self.op_ncds(instr),
+			0x14 => self.op_cdp(instr),
+			0x16 => self.op_ncdt(instr),
+			0x1B => self.op_nccs(instr),
+			0x1C => self.op_cc(instr),
+			0x1E => self.op_ncs(instr),
+			0x20 => self.op_nct(instr),
 			0x28 => self.op_sqr(instr),
 			0x2A => self.op_dpct(instr),
 			0x2D => self.op_avsz3(),
@@ -521,6 +528,7 @@ impl Gte {
 			0x30 => self.op_rtpt(instr),
 			0x3D => self.op_gpf(instr),
 			0x3E => self.op_gpl(instr),
+			0x3F => self.op_ncct(instr),
 
 			_ => {}//unimplemented!("GTE instruction 0x{:X}", instr.opcode())
 		}
@@ -674,6 +682,79 @@ impl Gte {
 		component as i32 as i16
 	}
 
+	fn set_ir(&mut self, lm: bool) {
+		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, lm);
+		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, lm);
+		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, lm);
+	}
+
+	fn push_colour_fifo(&mut self, instr: GteInstruction) {
+		self.regs.rgb[0] = self.regs.rgb[1];
+		self.regs.rgb[1] = self.regs.rgb[2];
+		
+		self.regs.rgb[2].r = self.clamp_rgb_component(1, self.regs.mac1 >> 4);
+		self.regs.rgb[2].g = self.clamp_rgb_component(2, self.regs.mac2 >> 4);
+		self.regs.rgb[2].b = self.clamp_rgb_component(3, self.regs.mac3 >> 4);
+		self.regs.rgb[2].c = self.regs.rgbc.c;
+
+		self.set_ir(instr.lm());
+	}
+
+	fn interp_far_colour(&mut self, instr: GteInstruction, m1: u64, m2: u64, m3: u64) {
+		let mac1 = self.clamp_mac(1, (((self.regs.far_colour.x as u64) << 12) - m1) as i64, instr.sf());
+		let mac2 = self.clamp_mac(2, (((self.regs.far_colour.y as u64) << 12) - m2) as i64, instr.sf());
+		let mac3 = self.clamp_mac(3, (((self.regs.far_colour.z as u64) << 12) - m3) as i64, instr.sf());
+
+		// saturation always behaves as if lm=0 for this step
+		let ir1 = self.clamp_ir(1, mac1, false) as i64;
+		let ir2 = self.clamp_ir(2, mac2, false) as i64;
+		let ir3 = self.clamp_ir(3, mac3, false) as i64;
+
+		self.regs.mac1 = self.clamp_mac(1, (m1 as i64) + ((self.regs.ir0 as i64) * ir1), instr.sf());
+		self.regs.mac2 = self.clamp_mac(2, (m2 as i64) + ((self.regs.ir0 as i64) * ir2), instr.sf());
+		self.regs.mac3 = self.clamp_mac(3, (m3 as i64) + ((self.regs.ir0 as i64) * ir3), instr.sf());
+	}
+
+	fn interp_light_colour(&mut self, instr: GteInstruction, vec_num: usize) {
+		// [IR1,IR2,IR3] = [MAC1,MAC2,MAC3] = (LLM*V0) SAR (sf*12)
+		self.regs.mac1 = self.clamp_mac(1, (self.regs.light_src_matrix.m11 as i64 * self.regs.v[vec_num].x as i64)
+			+ (self.regs.light_src_matrix.m12 as i64 * self.regs.v[vec_num].y as i64)
+			+ (self.regs.light_src_matrix.m13 as i64 * self.regs.v[vec_num].z as i64), 
+			instr.sf());
+		self.regs.mac2 = self.clamp_mac(2, (self.regs.light_src_matrix.m21 as i64 * self.regs.v[vec_num].x as i64)
+			+ (self.regs.light_src_matrix.m22 as i64 * self.regs.v[vec_num].y as i64)
+			+ (self.regs.light_src_matrix.m23 as i64 * self.regs.v[vec_num].z as i64), 
+			instr.sf());
+		self.regs.mac3 = self.clamp_mac(3, (self.regs.light_src_matrix.m31 as i64 * self.regs.v[vec_num].x as i64)
+			+ (self.regs.light_src_matrix.m32 as i64 * self.regs.v[vec_num].y as i64)
+			+ (self.regs.light_src_matrix.m33 as i64 * self.regs.v[vec_num].z as i64), 
+			instr.sf());
+
+		self.set_ir(instr.lm());
+
+		// [IR1,IR2,IR3] = [MAC1,MAC2,MAC3] = (BK*1000h + LCM*IR) SAR (sf*12)
+		self.regs.mac1 = {
+			let mut mac = self.check_mac(1, ((self.regs.bg_colour.x as i64) << 12) + (self.regs.light_colour_matrix.m11 as i64 * self.regs.ir1 as i64));
+			mac = self.check_mac(1, mac + self.regs.light_colour_matrix.m12 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(1, mac + self.regs.light_colour_matrix.m13 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+		self.regs.mac2 = {
+			let mut mac = self.check_mac(2, ((self.regs.bg_colour.y as i64) << 12) + (self.regs.light_colour_matrix.m21 as i64 * self.regs.ir1 as i64));
+			mac = self.check_mac(2, mac + self.regs.light_colour_matrix.m22 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(2, mac + self.regs.light_colour_matrix.m23 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+		self.regs.mac3 = {
+			let mut mac = self.check_mac(3, ((self.regs.bg_colour.z as i64) << 12) + (self.regs.light_colour_matrix.m31 as i64 * self.regs.ir1 as i64));
+			mac = self.check_mac(3, mac + self.regs.light_colour_matrix.m32 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(3, mac + self.regs.light_colour_matrix.m33 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+
+		self.set_ir(instr.lm());
+	}
+
 	// copy of fogstations copy of duckstations unr dvivision impl
 	fn divide(&mut self, lhs: u32, rhs: u32) -> u32 {
 		if lhs < rhs * 2 {
@@ -703,19 +784,19 @@ impl Gte {
 
 		self.regs.mac1 = {
 			let mut mac = self.check_mac(1,((self.regs.translation_vec.x as i64) << 12) + (self.regs.rot_matrix.m11 as i64 * self.regs.v[vec_num].x as i64));
-			mac =  self.check_mac(1, mac + (self.regs.rot_matrix.m12 as i64 * self.regs.v[vec_num].y as i64));
+			mac = self.check_mac(1, mac + (self.regs.rot_matrix.m12 as i64 * self.regs.v[vec_num].y as i64));
 
 			self.clamp_mac(1, mac + (self.regs.rot_matrix.m13 as i64 * self.regs.v[vec_num].z as i64), instr.sf())
 		};
 		self.regs.mac2 = {
 			let mut mac = self.check_mac(2,((self.regs.translation_vec.y as i64) << 12) + (self.regs.rot_matrix.m21 as i64 * self.regs.v[vec_num].x as i64));
-			mac =  self.check_mac(2, mac + (self.regs.rot_matrix.m22 as i64 * self.regs.v[vec_num].y as i64));
+			mac = self.check_mac(2, mac + (self.regs.rot_matrix.m22 as i64 * self.regs.v[vec_num].y as i64));
 
 			self.clamp_mac(2, mac + (self.regs.rot_matrix.m23 as i64 * self.regs.v[vec_num].z as i64), instr.sf())
 		};
 		self.regs.mac3 = {
 			let mut mac = self.check_mac(3,((self.regs.translation_vec.z as i64) << 12) + (self.regs.rot_matrix.m31 as i64 * self.regs.v[vec_num].x as i64));
-			mac =  self.check_mac(3, mac + (self.regs.rot_matrix.m32 as i64 * self.regs.v[vec_num].y as i64));
+			mac = self.check_mac(3, mac + (self.regs.rot_matrix.m32 as i64 * self.regs.v[vec_num].y as i64));
 
 			self.clamp_mac(3, mac + (self.regs.rot_matrix.m33 as i64 * self.regs.v[vec_num].z as i64), instr.sf())
 		};
@@ -763,34 +844,6 @@ impl Gte {
 		}
 	}
 
-	fn interp_far_colour(&mut self, instr: GteInstruction, m1: u64, m2: u64, m3: u64) {
-		let mac1 = self.clamp_mac(1, (((self.regs.far_colour.x as u64) << 12) - m1) as i64, instr.sf());
-		let mac2 = self.clamp_mac(2, (((self.regs.far_colour.y as u64) << 12) - m2) as i64, instr.sf());
-		let mac3 = self.clamp_mac(3, (((self.regs.far_colour.z as u64) << 12) - m3) as i64, instr.sf());
-
-		// saturation always behaves as if lm=0 for this step
-		let ir1 = self.clamp_ir(1, mac1, false) as i64;
-		let ir2 = self.clamp_ir(2, mac2, false) as i64;
-		let ir3 = self.clamp_ir(3, mac3, false) as i64;
-
-		self.regs.mac1 = self.clamp_mac(1, (m1 as i64) + ((self.regs.ir0 as i64) * ir1), instr.sf());
-		self.regs.mac2 = self.clamp_mac(2, (m2 as i64) + ((self.regs.ir0 as i64) * ir2), instr.sf());
-		self.regs.mac3 = self.clamp_mac(3, (m3 as i64) + ((self.regs.ir0 as i64) * ir3), instr.sf());
-
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
-
-		// push colour FIFO
-		self.regs.rgb[0] = self.regs.rgb[1];
-		self.regs.rgb[1] = self.regs.rgb[2];
-		self.regs.rgb[2].c = self.regs.rgbc.c;
-
-		self.regs.rgb[2].r = self.clamp_rgb_component(1, self.regs.mac1 >> 4);
-		self.regs.rgb[2].g = self.clamp_rgb_component(2, self.regs.mac2 >> 4);
-		self.regs.rgb[2].b = self.clamp_rgb_component(3, self.regs.mac3 >> 4);
-	}
-
 	fn do_depth_queue(&mut self, instr: GteInstruction, rgb: Rgb) {
 		self.interp_far_colour(
 			instr, 
@@ -798,6 +851,37 @@ impl Gte {
 			(rgb.g as u64) << 16, 
 			(rgb.b as u64) << 16, 
 		);
+
+		self.push_colour_fifo(instr);
+	}
+
+	fn do_ncd(&mut self, instr: GteInstruction, vec_num: usize) {
+		self.interp_light_colour(instr, vec_num);
+
+		self.interp_far_colour(
+			instr, 
+			(((self.regs.rgbc.r as i64) << 4) * self.regs.ir1 as i64) as u64,
+			(((self.regs.rgbc.g as i64) << 4) * self.regs.ir2 as i64) as u64,
+			(((self.regs.rgbc.b as i64) << 4) * self.regs.ir3 as i64) as u64,
+		);
+
+		self.push_colour_fifo(instr);
+	}
+
+	fn do_nc(&mut self, instr: GteInstruction, vec_num: usize) {
+		self.interp_light_colour(instr, vec_num);
+
+		self.push_colour_fifo(instr);
+	}
+
+	fn do_ncc(&mut self, instr: GteInstruction, vec_num: usize) {
+		self.interp_light_colour(instr, vec_num);
+
+		self.regs.mac1 = self.clamp_mac(1, ((self.regs.rgbc.r as i64) << 4) * self.regs.ir1 as i64, instr.sf());
+		self.regs.mac2 = self.clamp_mac(2, ((self.regs.rgbc.g as i64) << 4) * self.regs.ir2 as i64, instr.sf());
+		self.regs.mac3 = self.clamp_mac(3, ((self.regs.rgbc.b as i64) << 4) * self.regs.ir3 as i64, instr.sf());
+
+		self.push_colour_fifo(instr);
 	}
 
 	fn op_rtps(&mut self, instr: GteInstruction) {
@@ -822,9 +906,7 @@ impl Gte {
 		self.regs.mac2 = self.clamp_mac(2, i64::from(self.regs.ir2).pow(2), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, i64::from(self.regs.ir3).pow(2), instr.sf());
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
+		self.set_ir(instr.lm());
 	}
 
 	fn op_nclip(&mut self) {
@@ -866,9 +948,7 @@ impl Gte {
 		self.regs.mac2 = self.clamp_mac(2, (i64::from(self.regs.rot_matrix.m33) * i64::from(self.regs.ir1)) - (i64::from(self.regs.rot_matrix.m11) * i64::from(self.regs.ir3)), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, (i64::from(self.regs.rot_matrix.m11) * i64::from(self.regs.ir2)) - (i64::from(self.regs.rot_matrix.m22) * i64::from(self.regs.ir1)), instr.sf());
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
+		self.set_ir(instr.lm());
 	}
 
 	fn op_gpf(&mut self, instr: GteInstruction) {
@@ -878,9 +958,7 @@ impl Gte {
 		self.regs.mac2 = self.clamp_mac(2, i64::from(self.regs.ir0) * i64::from(self.regs.ir2), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, i64::from(self.regs.ir0) * i64::from(self.regs.ir3), instr.sf());
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
+		self.set_ir(instr.lm());
 
 		// push result to colour FIFO
 		self.regs.rgb[0] = self.regs.rgb[1];
@@ -899,9 +977,7 @@ impl Gte {
 		self.regs.mac2 = self.clamp_mac(2, (i64::from(self.regs.mac2) << (instr.sf() * 12)) + (i64::from(self.regs.ir0) * i64::from(self.regs.ir2)), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, (i64::from(self.regs.mac3) << (instr.sf() * 12)) + (i64::from(self.regs.ir0) * i64::from(self.regs.ir3)), instr.sf());
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
+		self.set_ir(instr.lm());
 
 		// push result to colour FIFO
 		self.regs.rgb[0] = self.regs.rgb[1];
@@ -922,9 +998,9 @@ impl Gte {
 	fn op_dpct(&mut self, instr: GteInstruction) {
 		self.regs.flag = 0;
 
-		for _ in  0..3 {
-			self.do_depth_queue(instr, self.regs.rgb[0]);
-		}
+		self.do_depth_queue(instr, self.regs.rgb[0]);
+		self.do_depth_queue(instr, self.regs.rgb[1]);
+		self.do_depth_queue(instr, self.regs.rgb[2]);
 	}
 
 	fn op_intpl(&mut self, instr: GteInstruction) {
@@ -935,6 +1011,8 @@ impl Gte {
 			(self.regs.ir2 as u64) << 12, 
 			(self.regs.ir3 as u64) << 12, 
 		);
+
+		self.push_colour_fifo(instr);
 	}
 
 	fn op_mvmva(&mut self, instr: GteInstruction) {
@@ -1026,9 +1104,114 @@ impl Gte {
 			};
 		}
 
-		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
-		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
-		self.regs.ir3 = self.clamp_ir(3, self.regs.mac3, instr.lm());
+		self.set_ir(instr.lm());
+	}
+
+	fn op_ncds(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.do_ncd(instr, 0);
+	}
+
+	fn op_ncdt(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.do_ncd(instr, 0);
+		self.do_ncd(instr, 1);
+		self.do_ncd(instr, 2);
+	}
+
+	fn op_ncs(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.do_nc(instr, 0);
+	}
+
+	fn op_nct(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.do_nc(instr, 0);
+		self.do_nc(instr, 1);
+		self.do_nc(instr, 2);
+	}
+
+	fn op_nccs(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.do_ncc(instr, 0);
+	}
+
+	fn op_ncct(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.do_ncc(instr, 0);
+		self.do_ncc(instr, 1);
+		self.do_ncc(instr, 2);
+	}
+
+	fn op_cc(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+
+		self.regs.mac1 = {
+			let mut mac = self.check_mac(1, ((self.regs.bg_colour.x as i64) << 12) + (self.regs.light_colour_matrix.m11 as i64 * self.regs.ir1 as i64));
+			mac = mac + self.check_mac(1, self.regs.light_colour_matrix.m12 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(1, mac + self.regs.light_colour_matrix.m13 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+		self.regs.mac2 = {
+			let mut mac = self.check_mac(2, ((self.regs.bg_colour.y as i64) << 12) + (self.regs.light_colour_matrix.m21 as i64 * self.regs.ir1 as i64));
+			mac = mac + self.check_mac(2, self.regs.light_colour_matrix.m22 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(2, mac + self.regs.light_colour_matrix.m23 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+		self.regs.mac3 = {
+			let mut mac = self.check_mac(3, ((self.regs.bg_colour.z as i64) << 12) + (self.regs.light_colour_matrix.m31 as i64 * self.regs.ir1 as i64));
+			mac = mac + self.check_mac(3, self.regs.light_colour_matrix.m32 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(3, mac + self.regs.light_colour_matrix.m33 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+
+		self.set_ir(instr.lm());
+
+		self.regs.mac1 = self.clamp_mac(1, ((self.regs.rgbc.r as i64) << 4) * self.regs.ir1 as i64, instr.sf());
+		self.regs.mac2 = self.clamp_mac(2, ((self.regs.rgbc.g as i64) << 4) * self.regs.ir2 as i64, instr.sf());
+		self.regs.mac3 = self.clamp_mac(3, ((self.regs.rgbc.b as i64) << 4) * self.regs.ir3 as i64, instr.sf());
+
+		self.push_colour_fifo(instr);
+	}
+
+	fn op_cdp(&mut self, instr: GteInstruction) {
+		self.regs.flag = 0;
+		
+		self.regs.mac1 = {
+			let mut mac = self.check_mac(1, ((self.regs.bg_colour.x as i64) << 12) + (self.regs.light_colour_matrix.m11 as i64 * self.regs.ir1 as i64));
+			mac = self.check_mac(1, mac + self.regs.light_colour_matrix.m12 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(1, mac + self.regs.light_colour_matrix.m13 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+		self.regs.mac2 = {
+			let mut mac = self.check_mac(2, ((self.regs.bg_colour.y as i64) << 12) + (self.regs.light_colour_matrix.m21 as i64 * self.regs.ir1 as i64));
+			mac = self.check_mac(2, mac + self.regs.light_colour_matrix.m22 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(2, mac + self.regs.light_colour_matrix.m23 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+		self.regs.mac3 = {
+			let mut mac = self.check_mac(3, ((self.regs.bg_colour.z as i64) << 12) + (self.regs.light_colour_matrix.m31 as i64 * self.regs.ir1 as i64));
+			mac = self.check_mac(3, mac + self.regs.light_colour_matrix.m32 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(3, mac + self.regs.light_colour_matrix.m33 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+
+		self.set_ir(instr.lm());
+
+		self.interp_far_colour(
+			instr, 
+			(((self.regs.rgbc.r as i64) << 4) * self.regs.ir1 as i64) as u64,
+			(((self.regs.rgbc.g as i64) << 4) * self.regs.ir2 as i64) as u64,
+			(((self.regs.rgbc.b as i64) << 4) * self.regs.ir3 as i64) as u64,
+		);
+
+		self.push_colour_fifo(instr);
 	}
 
 }
