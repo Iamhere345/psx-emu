@@ -58,10 +58,10 @@ impl RectSize {
 #[derive(Default, Clone, Copy, Debug)]
 enum SemiTransparency {
 	#[default]
-	HalfBPlusHalfF,
-	BPlusF,
-	BMinusF,
-	BPlusFOver4,
+	HalfBPlusHalfF = 0,
+	BPlusF = 1,
+	BMinusF = 2,
+	BPlusFOver4 = 3,
 }
 
 impl SemiTransparency {
@@ -460,7 +460,7 @@ impl Gpu {
 
 		let _result = (self.tex_page.x_base)
 			| (self.tex_page.y_base) << 4
-			// TODO semi-transparency
+			| (self.tex_page.transp_type as u32) << 5
 			| (self.tex_page.bit_depth as u32) << 7
 			| (self.tex_page.dithering as u32) << 9
 			| (self.tex_page.allow_drawing_to_display_area as u32) << 10
@@ -1495,9 +1495,9 @@ fn apply_dithering(colour: Colour, p: Vertex) -> Colour {
 
 fn apply_modulation(tex_colour: Colour, shaded_colour: Colour) -> Colour {
 	Colour {
-		r: ((u32::from(tex_colour.r) * u32::from(shaded_colour.r)) / 128).clamp(0, 255) as u8,
-		g: ((u32::from(tex_colour.g) * u32::from(shaded_colour.g)) / 128).clamp(0, 255) as u8,
-		b: ((u32::from(tex_colour.b) * u32::from(shaded_colour.b)) / 128).clamp(0, 255) as u8,
+		r: (((tex_colour.r as i32) * (shaded_colour.r as i32)) >> 7).clamp(0, 255) as u8,
+		g: (((tex_colour.g as i32) * (shaded_colour.g as i32)) >> 7).clamp(0, 255) as u8,
+		b: (((tex_colour.b as i32) * (shaded_colour.b as i32)) >> 7).clamp(0, 255) as u8,
 	}
 }
 

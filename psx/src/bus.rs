@@ -313,7 +313,7 @@ impl Bus {
 				match addr as usize - MEMCONTROL_START {
 					0 => if write != 0x1F000000 { panic!("write to expansion 1 base addr 0x{:X}", write) },
 					4 => if write != 0x1F802000 { panic!("write to expansion 2 base addr 0x{:X}", write) },
-					_ => debug!("unhandled write to memcontrol [0x{:X}] 0x{write:X}", addr as usize),
+					_ => {}//debug!("unhandled write to memcontrol [0x{:X}] 0x{write:X}", addr as usize),
 				}
 			}
 			IRQ_START			..= IRQ_END => self.interrupts.write32(addr, write),

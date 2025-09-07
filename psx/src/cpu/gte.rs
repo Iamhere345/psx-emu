@@ -287,14 +287,14 @@ impl GteRegisters {
 			_ => unreachable!(),
 		};
 
-		trace!("Read $cop2r{reg_index}, got 0x{result:X}");
+		//trace!("Read $cop2r{reg_index}, got 0x{result:X}");
 
 		result
 	}
 
 	fn write_data_register(&mut self, reg_index: u32, write: u32) {
 
-		trace!("[{reg_index}] write 0x{write:X}");
+		//trace!("[{reg_index}] write 0x{write:X}");
 
 		match reg_index {
 			0 => self.v[0].from_word(write),
@@ -372,14 +372,14 @@ impl GteRegisters {
 			_ => unreachable!(),
 		};
 
-		trace!("Read $cnt{reg_index}, got 0x{result:X}");
+		//trace!("Read $cnt{reg_index}, got 0x{result:X}");
 
 		result
 	}
 
 	fn write_control_register(&mut self, reg_index: u32, write: u32) {
 
-		trace!("[ctrl{reg_index}] write 0x{write:X}");
+		//trace!("[ctrl{reg_index}] write 0x{write:X}");
 
 		match reg_index {
 			0 => { self.rot_matrix.m11 = write as i16; self.rot_matrix.m12 = (write >> 16) as i16; },
@@ -494,18 +494,31 @@ impl GteInstruction {
 
 pub struct Gte {
 	regs: GteRegisters,
+	used_ops: Vec<u32>,
+}
+
+impl Drop for Gte {
+	fn drop(&mut self) {
+		println!("used GTE ops: {:X?}", self.used_ops);
+	}
 }
 
 impl Gte {
 	pub fn new() -> Self {
 		Self {
 			regs: GteRegisters::new(),
+			used_ops: Vec::new(),
 		}
 	}
 
 	pub fn decode_and_exec(&mut self, instr_raw: u32) {
-
 		let instr = GteInstruction::from_raw(instr_raw);
+		
+		if !self.used_ops.contains(&instr.opcode()) {
+			self.used_ops.push(instr.opcode());
+		}
+
+		self.regs.flag = 0;
 
 		match instr.opcode() {
 			0x01 => self.op_rtps(instr),
@@ -522,6 +535,7 @@ impl Gte {
 			0x1E => self.op_ncs(instr),
 			0x20 => self.op_nct(instr),
 			0x28 => self.op_sqr(instr),
+			0x29 => self.op_dcpl(instr),
 			0x2A => self.op_dpct(instr),
 			0x2D => self.op_avsz3(),
 			0x2E => self.op_avsz4(),
@@ -554,7 +568,7 @@ impl Gte {
 	// mac overflows instead of saturating
 	fn clamp_mac(&mut self, mac_num: u32, set: i64, sf: u32) -> i32 {
 		if mac_num == 3 {
-			self.regs.mac3_unclamped = set;
+			self.regs.mac3_unclamped = (set << 20) >> 20;
 		}
 
 		if set > I44_MAX {
@@ -637,6 +651,8 @@ impl Gte {
 	}
 
 	fn clamp_otz(&mut self, set: i64) -> u16 {
+		trace!("clamp SZ3/OTZ 0x{set:X} {set}");
+
 		if set > 0xFFFF {
 			self.regs.flag |= 1 << 18;
 
@@ -780,8 +796,6 @@ impl Gte {
 	}
 
 	fn do_rtp(&mut self, instr: GteInstruction, vec_num: usize, depth_queue: bool) {
-		self.regs.flag = 0;
-
 		self.regs.mac1 = {
 			let mut mac = self.check_mac(1,((self.regs.translation_vec.x as i64) << 12) + (self.regs.rot_matrix.m11 as i64 * self.regs.v[vec_num].x as i64));
 			mac = self.check_mac(1, mac + (self.regs.rot_matrix.m12 as i64 * self.regs.v[vec_num].y as i64));
@@ -887,21 +901,16 @@ impl Gte {
 	fn op_rtps(&mut self, instr: GteInstruction) {
 		trace!("======== START RTPS ========");
 
-		self.regs.flag = 0;
 		self.do_rtp(instr, 0, true);
 	}
 
 	fn op_rtpt(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.do_rtp(instr, 0, false);
 		self.do_rtp(instr, 1, false);
 		self.do_rtp(instr, 2, true);
 	}
 
 	fn op_sqr(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.regs.mac1 = self.clamp_mac(1, i64::from(self.regs.ir1).pow(2), instr.sf());
 		self.regs.mac2 = self.clamp_mac(2, i64::from(self.regs.ir2).pow(2), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, i64::from(self.regs.ir3).pow(2), instr.sf());
@@ -910,8 +919,6 @@ impl Gte {
 	}
 
 	fn op_nclip(&mut self) {
-		self.regs.flag = 0;
-
 		let dot_product = (i64::from(self.regs.sxy0.x) * i64::from(self.regs.sxy1.y))
 			+ (i64::from(self.regs.sxy1.x) * i64::from(self.regs.sxy2.y))
 			+ (i64::from(self.regs.sxy2.x) * i64::from(self.regs.sxy0.y))
@@ -923,8 +930,6 @@ impl Gte {
 	}
 
 	fn op_avsz3(&mut self) {
-		self.regs.flag = 0;
-
 		let avg_z = i64::from(self.regs.zsf3) * (u32::from(self.regs.sz1) + u32::from(self.regs.sz2) + u32::from(self.regs.sz3)) as i64;
 
 		self.regs.mac0 = self.clamp_mac0(avg_z);
@@ -932,8 +937,6 @@ impl Gte {
 	}
 
 	fn op_avsz4(&mut self) {
-		self.regs.flag = 0;
-
 		let avg_z = i64::from(self.regs.zsf4) * (u32::from(self.regs.sz0) + u32::from(self.regs.sz1) + u32::from(self.regs.sz2) + u32::from(self.regs.sz3)) as i64;
 
 		self.regs.mac0 = self.clamp_mac0(avg_z);
@@ -942,8 +945,6 @@ impl Gte {
 
 	// outer product is a mistranslation of cross product
 	fn op_op(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.regs.mac1 = self.clamp_mac(1, (i64::from(self.regs.rot_matrix.m22) * i64::from(self.regs.ir3)) - (i64::from(self.regs.rot_matrix.m33) * i64::from(self.regs.ir2)), instr.sf());
 		self.regs.mac2 = self.clamp_mac(2, (i64::from(self.regs.rot_matrix.m33) * i64::from(self.regs.ir1)) - (i64::from(self.regs.rot_matrix.m11) * i64::from(self.regs.ir3)), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, (i64::from(self.regs.rot_matrix.m11) * i64::from(self.regs.ir2)) - (i64::from(self.regs.rot_matrix.m22) * i64::from(self.regs.ir1)), instr.sf());
@@ -952,8 +953,6 @@ impl Gte {
 	}
 
 	fn op_gpf(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.regs.mac1 = self.clamp_mac(1, i64::from(self.regs.ir0) * i64::from(self.regs.ir1), instr.sf());
 		self.regs.mac2 = self.clamp_mac(2, i64::from(self.regs.ir0) * i64::from(self.regs.ir2), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, i64::from(self.regs.ir0) * i64::from(self.regs.ir3), instr.sf());
@@ -971,8 +970,6 @@ impl Gte {
 	}
 
 	fn op_gpl(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.regs.mac1 = self.clamp_mac(1, (i64::from(self.regs.mac1) << (instr.sf() * 12)) + (i64::from(self.regs.ir0) * i64::from(self.regs.ir1)), instr.sf());
 		self.regs.mac2 = self.clamp_mac(2, (i64::from(self.regs.mac2) << (instr.sf() * 12)) + (i64::from(self.regs.ir0) * i64::from(self.regs.ir2)), instr.sf());
 		self.regs.mac3 = self.clamp_mac(3, (i64::from(self.regs.mac3) << (instr.sf() * 12)) + (i64::from(self.regs.ir0) * i64::from(self.regs.ir3)), instr.sf());
@@ -990,22 +987,16 @@ impl Gte {
 	}
 
 	fn op_dpcs(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.do_depth_queue(instr, self.regs.rgbc);
 	}
 
 	fn op_dpct(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.do_depth_queue(instr, self.regs.rgb[0]);
-		self.do_depth_queue(instr, self.regs.rgb[1]);
-		self.do_depth_queue(instr, self.regs.rgb[2]);
+		self.do_depth_queue(instr, self.regs.rgb[0]);
+		self.do_depth_queue(instr, self.regs.rgb[0]);
 	}
 
 	fn op_intpl(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.interp_far_colour(instr, 
 			(self.regs.ir1 as u64) << 12, 
 			(self.regs.ir2 as u64) << 12, 
@@ -1016,8 +1007,6 @@ impl Gte {
 	}
 
 	fn op_mvmva(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		let matrix = match instr.mx() {
 			0 => self.regs.rot_matrix,
 			1 => self.regs.light_src_matrix,
@@ -1108,81 +1097,36 @@ impl Gte {
 	}
 
 	fn op_ncds(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.do_ncd(instr, 0);
 	}
 
 	fn op_ncdt(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.do_ncd(instr, 0);
 		self.do_ncd(instr, 1);
 		self.do_ncd(instr, 2);
 	}
 
 	fn op_ncs(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.do_nc(instr, 0);
 	}
 
 	fn op_nct(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.do_nc(instr, 0);
 		self.do_nc(instr, 1);
 		self.do_nc(instr, 2);
 	}
 
 	fn op_nccs(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.do_ncc(instr, 0);
 	}
 
 	fn op_ncct(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
 		self.do_ncc(instr, 0);
 		self.do_ncc(instr, 1);
 		self.do_ncc(instr, 2);
 	}
 
 	fn op_cc(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-
-		self.regs.mac1 = {
-			let mut mac = self.check_mac(1, ((self.regs.bg_colour.x as i64) << 12) + (self.regs.light_colour_matrix.m11 as i64 * self.regs.ir1 as i64));
-			mac = mac + self.check_mac(1, self.regs.light_colour_matrix.m12 as i64 * self.regs.ir2 as i64);
-
-			self.clamp_mac(1, mac + self.regs.light_colour_matrix.m13 as i64 * self.regs.ir3 as i64, instr.sf())
-		};
-		self.regs.mac2 = {
-			let mut mac = self.check_mac(2, ((self.regs.bg_colour.y as i64) << 12) + (self.regs.light_colour_matrix.m21 as i64 * self.regs.ir1 as i64));
-			mac = mac + self.check_mac(2, self.regs.light_colour_matrix.m22 as i64 * self.regs.ir2 as i64);
-
-			self.clamp_mac(2, mac + self.regs.light_colour_matrix.m23 as i64 * self.regs.ir3 as i64, instr.sf())
-		};
-		self.regs.mac3 = {
-			let mut mac = self.check_mac(3, ((self.regs.bg_colour.z as i64) << 12) + (self.regs.light_colour_matrix.m31 as i64 * self.regs.ir1 as i64));
-			mac = mac + self.check_mac(3, self.regs.light_colour_matrix.m32 as i64 * self.regs.ir2 as i64);
-
-			self.clamp_mac(3, mac + self.regs.light_colour_matrix.m33 as i64 * self.regs.ir3 as i64, instr.sf())
-		};
-
-		self.set_ir(instr.lm());
-
-		self.regs.mac1 = self.clamp_mac(1, ((self.regs.rgbc.r as i64) << 4) * self.regs.ir1 as i64, instr.sf());
-		self.regs.mac2 = self.clamp_mac(2, ((self.regs.rgbc.g as i64) << 4) * self.regs.ir2 as i64, instr.sf());
-		self.regs.mac3 = self.clamp_mac(3, ((self.regs.rgbc.b as i64) << 4) * self.regs.ir3 as i64, instr.sf());
-
-		self.push_colour_fifo(instr);
-	}
-
-	fn op_cdp(&mut self, instr: GteInstruction) {
-		self.regs.flag = 0;
-		
 		self.regs.mac1 = {
 			let mut mac = self.check_mac(1, ((self.regs.bg_colour.x as i64) << 12) + (self.regs.light_colour_matrix.m11 as i64 * self.regs.ir1 as i64));
 			mac = self.check_mac(1, mac + self.regs.light_colour_matrix.m12 as i64 * self.regs.ir2 as i64);
@@ -1204,6 +1148,46 @@ impl Gte {
 
 		self.set_ir(instr.lm());
 
+		self.regs.mac1 = self.clamp_mac(1, ((self.regs.rgbc.r as i64) << 4) * self.regs.ir1 as i64, instr.sf());
+		self.regs.mac2 = self.clamp_mac(2, ((self.regs.rgbc.g as i64) << 4) * self.regs.ir2 as i64, instr.sf());
+		self.regs.mac3 = self.clamp_mac(3, ((self.regs.rgbc.b as i64) << 4) * self.regs.ir3 as i64, instr.sf());
+
+		self.push_colour_fifo(instr);
+	}
+
+	fn op_cdp(&mut self, instr: GteInstruction) {
+		self.regs.mac1 = {
+			let mut mac = self.check_mac(1, ((self.regs.bg_colour.x as i64) << 12) + (self.regs.light_colour_matrix.m11 as i64 * self.regs.ir1 as i64));
+			mac = self.check_mac(1, mac + self.regs.light_colour_matrix.m12 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(1, mac + self.regs.light_colour_matrix.m13 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+		self.regs.mac2 = {
+			let mut mac = self.check_mac(2, ((self.regs.bg_colour.y as i64) << 12) + (self.regs.light_colour_matrix.m21 as i64 * self.regs.ir1 as i64));
+			mac = self.check_mac(2, mac + self.regs.light_colour_matrix.m22 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(2, mac + self.regs.light_colour_matrix.m23 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+		self.regs.mac3 = {
+			let mut mac = self.check_mac(3, ((self.regs.bg_colour.z as i64) << 12) + (self.regs.light_colour_matrix.m31 as i64 * self.regs.ir1 as i64));
+			mac = self.check_mac(3, mac + self.regs.light_colour_matrix.m32 as i64 * self.regs.ir2 as i64);
+
+			self.clamp_mac(3, mac + self.regs.light_colour_matrix.m33 as i64 * self.regs.ir3 as i64, instr.sf())
+		};
+
+		self.set_ir(instr.lm());
+
+		self.interp_far_colour(
+			instr, 
+			(((self.regs.rgbc.r as i64) << 4) * self.regs.ir1 as i64) as u64,
+			(((self.regs.rgbc.g as i64) << 4) * self.regs.ir2 as i64) as u64,
+			(((self.regs.rgbc.b as i64) << 4) * self.regs.ir3 as i64) as u64,
+		);
+
+		self.push_colour_fifo(instr);
+	}
+
+	fn op_dcpl(&mut self, instr: GteInstruction) {
 		self.interp_far_colour(
 			instr, 
 			(((self.regs.rgbc.r as i64) << 4) * self.regs.ir1 as i64) as u64,
