@@ -189,7 +189,7 @@ impl PSXEmulator {
 		// Jump to the EXE entry point; execution can continue normally after this
 		self.cpu.pc = initial_pc;
 
-		//self.setup_amidog_logs();
+		self.setup_amidog_logs();
 
 	}
 

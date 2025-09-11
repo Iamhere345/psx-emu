@@ -635,24 +635,21 @@ impl Gte {
 	}
 
 	// emulates a hardware bug in RTPx which sets the IR3 flag incorrectly
-	fn clamp_ir3_z(&mut self, set: i32, sf: u32, lm: bool) -> i16 {
-		// the IR3 saturated flag is set when sf=0 and MAC3 >> 12 overflows
-		let inverted_shift = (1 - sf) * 12;
-		let flag_mac3 = (set >> inverted_shift) as i32;
+	fn clamp_ir3_z(&mut self, set: i64, sf: u32, lm: bool) -> i16 {
+		let mac_sf = (set >> sf * 12) as i32;
+		let mac_12 = (set >> 12) as i32;
 
-		if !(-0x8000..0x7FFF).contains(&flag_mac3) {
+		let min = if lm { 0 } else { -0x8000 };
+
+		if mac_12 < -0x8000 || mac_12 > 0x7FFF {
 			self.regs.flag |= 1 << 22;
 		}
 
-		let clamp_min = if lm { 0 } else { -0x8000 };
-		
-		set.clamp(clamp_min, 0x7FFF) as i16
+		mac_sf.clamp(min, 0x7FFF) as i16
 
 	}
 
 	fn clamp_otz(&mut self, set: i64) -> u16 {
-		trace!("clamp SZ3/OTZ 0x{set:X} {set}");
-
 		if set > 0xFFFF {
 			self.regs.flag |= 1 << 18;
 
@@ -819,7 +816,7 @@ impl Gte {
 
 		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
 		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
-		self.regs.ir3 = self.clamp_ir3_z(self.regs.mac3, instr.sf(), instr.lm());
+		self.regs.ir3 = self.clamp_ir3_z(self.regs.mac3_unclamped as i64, instr.sf(), instr.lm());
 
 		// push to SZ FIFO
 		self.regs.sz0 = self.regs.sz1;
@@ -959,14 +956,7 @@ impl Gte {
 
 		self.set_ir(instr.lm());
 
-		// push result to colour FIFO
-		self.regs.rgb[0] = self.regs.rgb[1];
-		self.regs.rgb[1] = self.regs.rgb[2];
-		
-		self.regs.rgb[2].r = self.clamp_rgb_component(1, self.regs.mac1 >> 4);
-		self.regs.rgb[2].g = self.clamp_rgb_component(2, self.regs.mac2 >> 4);
-		self.regs.rgb[2].b = self.clamp_rgb_component(3, self.regs.mac3 >> 4);
-		self.regs.rgb[2].c = self.regs.rgbc.c;
+		self.push_colour_fifo(instr);
 	}
 
 	fn op_gpl(&mut self, instr: GteInstruction) {
@@ -976,14 +966,7 @@ impl Gte {
 
 		self.set_ir(instr.lm());
 
-		// push result to colour FIFO
-		self.regs.rgb[0] = self.regs.rgb[1];
-		self.regs.rgb[1] = self.regs.rgb[2];
-		
-		self.regs.rgb[2].r = self.clamp_rgb_component(1, self.regs.mac1 >> 4);
-		self.regs.rgb[2].g = self.clamp_rgb_component(2, self.regs.mac2 >> 4);
-		self.regs.rgb[2].b = self.clamp_rgb_component(3, self.regs.mac3 >> 4);
-		self.regs.rgb[2].c = self.regs.rgbc.c;
+		self.push_colour_fifo(instr);
 	}
 
 	fn op_dpcs(&mut self, instr: GteInstruction) {
@@ -1068,9 +1051,9 @@ impl Gte {
 			let mac2 = self.clamp_mac(2, ((tr_vector.y as i64) << 12) + (matrix.m21 as i64 * vector.x as i64), instr.sf());
 			let mac3 = self.clamp_mac(3, ((tr_vector.z as i64) << 12) + (matrix.m31 as i64 * vector.x as i64), instr.sf());
 
-			self.clamp_ir(1, mac1, instr.lm());
-			self.clamp_ir(2, mac2, instr.lm());
-			self.clamp_ir(3, mac3, instr.lm());
+			self.clamp_ir(1, mac1, false);
+			self.clamp_ir(2, mac2, false);
+			self.clamp_ir(3, mac3, false);
 
 		} else {
 			self.regs.mac1 = {
