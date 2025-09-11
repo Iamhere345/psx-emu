@@ -30,9 +30,8 @@ For now only keyboard controls are supported.
  - Select: Backslash
 
 ## Screenshots
-![image](https://github.com/user-attachments/assets/8f0124f8-ad8b-4e15-a200-9275ed306742)
-![image](https://github.com/user-attachments/assets/b26b1dd9-47a8-410b-b68f-5ffa2e27ec33)
-![image](https://github.com/user-attachments/assets/eceeace9-3c76-40c9-92df-a3033295c6c7)
-![image](https://github.com/user-attachments/assets/a892cfb3-ca70-4cce-b937-fd5fd29f720d)
-![image](https://github.com/user-attachments/assets/59b9696c-b3df-440f-84fe-c9b9b2028b2b)
-![image](https://github.com/user-attachments/assets/c39e5fd1-535c-4f3a-849b-8f4725d62889)
+<img width="1802" height="832" alt="Screenshot 2025-09-07 162252" src="https://github.com/user-attachments/assets/8747fc08-253e-41e3-b0a1-515a692f424e" />
+<img width="1802" height="832" alt="Screenshot 2025-09-07 162423" src="https://github.com/user-attachments/assets/5f4a2053-7d88-4fe4-b88f-a8866e81d6b5" />
+<img width="1802" height="832" alt="Screenshot 2025-09-07 163120" src="https://github.com/user-attachments/assets/f20711dc-f907-4b7f-bc11-b6cee865d25c" />
+<img width="1802" height="832" alt="Screenshot 2025-09-07 163340" src="https://github.com/user-attachments/assets/7cc26a5b-cf58-4a3c-833e-4f0e0764db27" />
+<img width="1802" height="832" alt="Screenshot 2025-09-07 163623" src="https://github.com/user-attachments/assets/b81a5e60-3a8e-41e6-a76b-7d38b7d728fe" />
