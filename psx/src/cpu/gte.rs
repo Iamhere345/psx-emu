@@ -1057,19 +1057,19 @@ impl Gte {
 
 		} else {
 			self.regs.mac1 = {
-				let mut mac = self.check_mac(1, (tr_vector.x as i64) << 12) + (matrix.m11 as i64 * vector.x as i64);
+				let mut mac = self.check_mac(1,((tr_vector.x as i64) << 12) + (matrix.m11 as i64 * vector.x as i64));
 				mac = self.check_mac(1, mac + (matrix.m12 as i64 * vector.y as i64));
 
 				self.clamp_mac(1, mac + (matrix.m13 as i64 * vector.z as i64), instr.sf())
 			};
 			self.regs.mac2 = {
-				let mut mac = self.check_mac(2, (tr_vector.y as i64) << 12) + (matrix.m21 as i64 * vector.x as i64);
+				let mut mac = self.check_mac(2,((tr_vector.y as i64) << 12) + (matrix.m21 as i64 * vector.x as i64));
 				mac = self.check_mac(2, mac + (matrix.m22 as i64 * vector.y as i64));
 
 				self.clamp_mac(2, mac + (matrix.m23 as i64 * vector.z as i64), instr.sf())
 			};
 			self.regs.mac3 = {
-				let mut mac = self.check_mac(3, (tr_vector.z as i64) << 12) + (matrix.m31 as i64 * vector.x as i64);
+				let mut mac = self.check_mac(3,((tr_vector.z as i64) << 12) + (matrix.m31 as i64 * vector.x as i64));
 				mac = self.check_mac(3, mac + (matrix.m32 as i64 * vector.y as i64));
 
 				self.clamp_mac(3, mac + (matrix.m33 as i64 * vector.z as i64), instr.sf())
