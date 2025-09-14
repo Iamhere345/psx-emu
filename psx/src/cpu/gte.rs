@@ -1,5 +1,3 @@
-use log::*;
-
 const I44_MIN: i64 = -(1 << 43);
 const I44_MAX: i64 = (1 << 43) - 1;
 
@@ -287,14 +285,10 @@ impl GteRegisters {
 			_ => unreachable!(),
 		};
 
-		//trace!("Read $cop2r{reg_index}, got 0x{result:X}");
-
 		result
 	}
 
 	fn write_data_register(&mut self, reg_index: u32, write: u32) {
-
-		//trace!("[{reg_index}] write 0x{write:X}");
 
 		match reg_index {
 			0 => self.v[0].from_word(write),
@@ -372,14 +366,10 @@ impl GteRegisters {
 			_ => unreachable!(),
 		};
 
-		//trace!("Read $cnt{reg_index}, got 0x{result:X}");
-
 		result
 	}
 
 	fn write_control_register(&mut self, reg_index: u32, write: u32) {
-
-		//trace!("[ctrl{reg_index}] write 0x{write:X}");
 
 		match reg_index {
 			0 => { self.rot_matrix.m11 = write as i16; self.rot_matrix.m12 = (write >> 16) as i16; },
@@ -494,29 +484,17 @@ impl GteInstruction {
 
 pub struct Gte {
 	regs: GteRegisters,
-	used_ops: Vec<u32>,
-}
-
-impl Drop for Gte {
-	fn drop(&mut self) {
-		println!("used GTE ops: {:X?}", self.used_ops);
-	}
 }
 
 impl Gte {
 	pub fn new() -> Self {
 		Self {
 			regs: GteRegisters::new(),
-			used_ops: Vec::new(),
 		}
 	}
 
 	pub fn decode_and_exec(&mut self, instr_raw: u32) {
 		let instr = GteInstruction::from_raw(instr_raw);
-		
-		if !self.used_ops.contains(&instr.opcode()) {
-			self.used_ops.push(instr.opcode());
-		}
 
 		self.regs.flag = 0;
 
@@ -544,7 +522,7 @@ impl Gte {
 			0x3E => self.op_gpl(instr),
 			0x3F => self.op_ncct(instr),
 
-			_ => {}//unimplemented!("GTE instruction 0x{:X}", instr.opcode())
+			_ => unimplemented!("GTE instruction 0x{:X}", instr.opcode())
 		}
 
 	}
@@ -646,7 +624,6 @@ impl Gte {
 		}
 
 		mac_sf.clamp(min, 0x7FFF) as i16
-
 	}
 
 	fn clamp_otz(&mut self, set: i64) -> u16 {
@@ -678,15 +655,11 @@ impl Gte {
 	}
 
 	fn clamp_sxy(&mut self, comp_num: i32, component: i64) -> i16 {
-		trace!("clamp SXY comp: 0x{component:X} {component}");
-
 		if component < -0x400 {
-			trace!("SXY: underflow 0x{component:X}");
 			self.regs.flag |= (1 << SX2_SATURATED) >> (comp_num - 1);
 
 			return -0x400;
 		} else if component > 0x3FF {
-			trace!("SXY: overflow 0x{component:X}");
 			self.regs.flag |= (1 << SX2_SATURATED) >> (comp_num - 1);
 
 			return 0x3FF;
@@ -812,8 +785,6 @@ impl Gte {
 			self.clamp_mac(3, mac + (self.regs.rot_matrix.m33 as i64 * self.regs.v[vec_num].z as i64), instr.sf())
 		};
 
-		trace!("mac3: 0x{:X}, mac3_s: 0x{:X}", self.regs.mac3, self.regs.mac3_unclamped);
-
 		self.regs.ir1 = self.clamp_ir(1, self.regs.mac1, instr.lm());
 		self.regs.ir2 = self.clamp_ir(2, self.regs.mac2, instr.lm());
 		self.regs.ir3 = self.clamp_ir3_z(self.regs.mac3_unclamped as i64, instr.sf(), instr.lm());
@@ -824,27 +795,16 @@ impl Gte {
 		self.regs.sz2 = self.regs.sz3;
 		self.regs.sz3 = self.clamp_otz(self.regs.mac3_unclamped >> 12); // OTZ and SZ3 have the same limiter
 
-		trace!("divide: 0x{:X} / 0x{:X}", self.regs.h, self.regs.sz3);
-
 		let div = self.divide(self.regs.h as u32, self.regs.sz3 as u32) as i64;
 
 		self.regs.sxy0 = self.regs.sxy1;
 		self.regs.sxy1 = self.regs.sxy2;
 		
-		trace!("OFX: 0x{:X} IR1: 0x{:X} div: 0x{:X}", self.regs.screen_offset.x, self.regs.ir1, div);
-		trace!("OFY: 0x{:X} IR2: 0x{:X}", self.regs.screen_offset.y, self.regs.ir1);
-
-		trace!("SX: 0x{div:X} * 0x{:X} + 0x{:X}", self.regs.ir1 as i64, self.regs.screen_offset.x as i64);
-		trace!("SY: 0x{div:X} * 0x{:X} + 0x{:X}", self.regs.ir2 as i64, self.regs.screen_offset.y as i64);
-
 		let sx = div * (self.regs.ir1 as i64) + (self.regs.screen_offset.x as i32 as i64);
 		self.clamp_mac0(sx);
 
 		let sy = div * (self.regs.ir2 as i64) + (self.regs.screen_offset.y as i32 as i64);
 		self.clamp_mac0(sy);
-
-		trace!("SX: 0x{sx:X} SY: 0x{sy:X}");
-		trace!("SX: 0x{:X} {} SY: 0x{:X} {}", (sx >> 16), (sx >> 16), (sy >> 16), (sy >> 16));
 
 		self.regs.sxy2.x = self.clamp_sxy(1, sx >> 16);
 		self.regs.sxy2.y = self.clamp_sxy(2, sy >> 16);
@@ -896,8 +856,6 @@ impl Gte {
 	}
 
 	fn op_rtps(&mut self, instr: GteInstruction) {
-		trace!("======== START RTPS ========");
-
 		self.do_rtp(instr, 0, true);
 	}
 

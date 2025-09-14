@@ -1183,58 +1183,52 @@ impl Gpu {
 	}
 
 	fn draw_polygon(&mut self, mut cmd: PolygonCmdParams) {
-
 		let mut v = [Vertex::default(); 4];
 
-		let shaded = usize::from(cmd.shaded);
-		let textured = usize::from(cmd.textured);
+		for i in 0..cmd.vertices as usize {
+			if i != 0 && cmd.shaded {
+				v[i].colour = Colour::from_packet(self.gp0_params.remove(0));
+			}
+			
+			let vertex = Vertex::from_packet(self.gp0_params.remove(0)).plus_offset(self.drawing_offset);
+			v[i].x = vertex.x;
+			v[i].y = vertex.y;
 
-		let vertex_offset = 1 + (textured | shaded) + (textured & shaded);
-		let colour_offset = shaded * (2 + textured);
-		let texcoord_offset = textured * (2 + shaded);
+			if cmd.textured {
+				let tex_word = self.gp0_params.remove(0);
 
-		let clut_packet = self.gp0_params[1];
-		cmd.clut = Vertex::new((((clut_packet >> 16) & 0x3F) as u16 as i32) * 16, ((clut_packet >> 22) & 0x1FF) as u16 as i32);
+				match i {
+					0 => cmd.clut = Vertex::new((((tex_word >> 16) & 0x3F) as u16 as i32) * 16, ((tex_word >> 22) & 0x1FF) as u16 as i32),
+					1 => {
+						let tex_page = tex_word >> 16;
 
-		let tex_page = self.gp0_params[textured * (3 + shaded)] >> 16;
+						self.tex_page = TexturePage {
+							x_base: 64 * (tex_page & 0xF),
+							y_base: 256 * ((tex_page >> 4) & 1),
+							bit_depth: TexBitDepth::from_bits((tex_page >> 7) & 3),
+							..self.tex_page
+						};
+					},
+					_ => {},
+				}
 
-		self.tex_page = TexturePage {
-			x_base: 64 * (tex_page & 0xF),
-			y_base: 256 * ((tex_page >> 4) & 1),
-			bit_depth: TexBitDepth::from_bits((tex_page >> 7) & 3),
-			..self.tex_page
-		};
+				v[i].tex_x = (tex_word & 0xFF) as i32;
+				v[i].tex_y = ((tex_word >> 8) & 0xFF) as i32;
+			}
 
-		v[0] = Vertex::from_packet(self.gp0_params[0]).plus_offset(self.drawing_offset);
+		}
+
 		v[0].colour = cmd.colour;
-		v[0].tex_x = (self.gp0_params[1 + 0 * texcoord_offset] & 0xFF) as i32;
-		v[0].tex_y = ((self.gp0_params[1 + 0 * texcoord_offset] >> 8) & 0xFF) as i32;
-
-		v[1] = Vertex::from_packet(self.gp0_params[1 * vertex_offset]).plus_offset(self.drawing_offset);
-		v[1].colour = Colour::from_packet(self.gp0_params[1 + 0 * colour_offset]);
-		v[1].tex_x = (self.gp0_params[1 + 1 * texcoord_offset] & 0xFF) as i32;
-		v[1].tex_y = ((self.gp0_params[1 + 1 * texcoord_offset] >> 8) & 0xFF) as i32;
-
-		v[2] = Vertex::from_packet(self.gp0_params[2 * vertex_offset]).plus_offset(self.drawing_offset);
-		v[2].colour = Colour::from_packet(self.gp0_params[1 + 1 * colour_offset]);
-		v[2].tex_x = (self.gp0_params[1 + 2 * texcoord_offset] & 0xFF) as i32;
-		v[2].tex_y = ((self.gp0_params[1 + 2 * texcoord_offset] >> 8) & 0xFF) as i32;
 
 		ensure_vertex_order(&mut v);
 		self.draw_triangle(v[0], v[1], v[2], cmd);
 
 		if cmd.vertices == 4 {
-			v[3] = Vertex::from_packet(self.gp0_params[3 * vertex_offset]).plus_offset(self.drawing_offset);
-			v[3].colour = Colour::from_packet(self.gp0_params[1 + 2 * colour_offset]);
-			v[3].tex_x = (self.gp0_params[1 + 3 * texcoord_offset] & 0xFF) as i32;
-			v[3].tex_y = ((self.gp0_params[1 + 3 * texcoord_offset] >> 8) & 0xFF) as i32;
-
 			let mut v2 = [v[1], v[2], v[3]];
 			ensure_vertex_order(&mut v2);
 
 			self.draw_triangle(v2[0], v2[1], v2[2], cmd);
 		}
-
 	}
 
 	fn draw_triangle(&mut self, v0: Vertex, v1: Vertex, v2: Vertex, cmd: PolygonCmdParams) {

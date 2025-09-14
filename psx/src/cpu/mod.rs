@@ -161,13 +161,20 @@ impl R3000 {
 
 		self.in_delay_slot = in_delay_slot;
 
+		let instr = Instruction::from_u32(instruction);
+
 		self.cop0.reg_cause.set_hw_interrupt(bus.interrupts.triggered());
 		if self.cop0.interrupt_pending() && self.cop0.reg_sr.cur_int_enable {
 			//log::trace!("interrupt (status: 0b{:b})", bus.interrupts.read32(0x1F801070));
-			// TODO GTE instructions need to be run before the interrupt is serviced
+
+			// ? GTE instructions need to be run before the interrupt is serviced
+			if instr.opcode() == 0x12 {
+				self.decode_and_exec(instr, bus, scheduler);
+			}
+
 			self.exception(Exception::Interrupt);
 		} else {
-			self.decode_and_exec(Instruction::from_u32(instruction), bus, scheduler);
+			self.decode_and_exec(instr, bus, scheduler);
 		}
 
 		/* print!("{:08x} {instruction:08x} ", self.pc);
