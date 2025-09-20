@@ -1,6 +1,10 @@
+use std::time::Duration;
+
 use eframe::egui::{self, CentralPanel, Key};
 use eframe::{App, CreationContext};
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex, TabViewer};
+use rodio::buffer::SamplesBuffer;
+use rodio::OutputStream;
 
 use psx::PSXEmulator;
 
@@ -39,6 +43,8 @@ pub struct FrontendState {
 	breakpoints: Breakpoints,
 
 	new_breakpoint_open: bool,
+
+	stream_handle: OutputStream,
 }
 
 pub struct Desktop {
@@ -111,7 +117,7 @@ impl TabViewer for FrontendState {
 
 	fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
 		match tab.as_str() {
-			"Control" => self.control.show(ui,&mut self.psx, &mut self.tty_logger, &mut self.breakpoints),
+			"Control" => self.control.show(ui, &mut self.psx, &mut self.tty_logger, &mut self.breakpoints, &mut self.stream_handle),
 			"Disassembly" => self.disassembly.show(ui, &mut self.psx),
 			"VRAM" => self.vram.show(ui, &self.psx),
 			"Display" => self.display.show(ui, &self.psx),
@@ -133,8 +139,19 @@ impl FrontendState {
 	pub fn new(cc: &CreationContext) -> Self {
 		let bios = std::fs::read(BIOS_PATH).unwrap();
 
+		let stream_handle = rodio::OutputStreamBuilder::open_default_stream().expect("open default audio stream");
+		let sink = rodio::Sink::connect_new(&stream_handle.mixer());
+		
+		let audio_callback = Box::new(move |buffer: Vec<f32>| {
+			if sink.len() > 2 {
+				std::thread::sleep(Duration::from_millis(1));
+			}
+
+			sink.append(SamplesBuffer::new(1, 44100, buffer));
+		});
+
 		#[allow(unused_mut)]
-		let mut psx = PSXEmulator::new(bios);
+		let mut psx = PSXEmulator::new(bios, audio_callback);
 		Self {
 			psx: psx,
 
@@ -147,7 +164,10 @@ impl FrontendState {
 			breakpoints: Breakpoints::new(),
 
 			new_breakpoint_open: false,
+
+			stream_handle: stream_handle,
 		}
+
 	}
 
 	fn is_keyboard_input_down(&mut self, key: Key, ctx: &egui::Context) -> bool {

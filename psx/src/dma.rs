@@ -541,7 +541,8 @@ impl Bus {
 							self.gpu.gp0_cmd(word);
 						},
 						CHANNEL_SPU => {
-							// stubbed
+							self.spu.write_sram(word as u16);
+							self.spu.write_sram((word >> 16) as u16);
 						},
 						CHANNEL_MDECIN => {
 							// stubbed

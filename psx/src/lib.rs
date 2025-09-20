@@ -27,11 +27,11 @@ pub struct PSXEmulator {
 }
 
 impl PSXEmulator {
-	pub fn new(bios: Vec<u8>) -> Self {
+	pub fn new(bios: Vec<u8>, audio_callback: Box<dyn Fn(Vec<f32>)>) -> Self {
 		let mut psx = Self {
 			cpu: R3000::new(),
 			bus: Bus::new(bios),
-			scheduler: Scheduler::new(),
+			scheduler: Scheduler::new(audio_callback),
 
 			pc_breakpoints: Vec::new(),
 			breakpoint_hit: false,
@@ -39,7 +39,9 @@ impl PSXEmulator {
 			out_vram: vec![0; 512 * 2048].into_boxed_slice().try_into().unwrap(),
 		};
 
+
 		psx.scheduler.schedule_event(SchedulerEvent::new(scheduler::EventType::Vblank), 571212);
+		psx.scheduler.schedule_event(SchedulerEvent::new(EventType::SpuTick), 768);
 
 		psx
 	}

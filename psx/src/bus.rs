@@ -84,7 +84,7 @@ pub struct Bus {
 	pub interrupts: Interrupts,
 	pub timers: Timers,
 	pub sio0: Sio0,
-	spu: Spu,
+	pub spu: Spu,
 
 	pub read_breakpoints: Vec<u32>,
 	pub write_breakpoints: Vec<u32>,

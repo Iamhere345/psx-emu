@@ -12,5 +12,6 @@ egui_extras = "0.31.1"
 egui_dock = "0.16.0"
 rcue = "0.1.3"
 rfd = "0.15.3"
+rodio = "0.21.1"
 env_logger = { workspace = true }
 log = { workspace = true }

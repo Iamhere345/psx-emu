@@ -1,13 +1,16 @@
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use eframe::egui::Ui;
 use rfd::FileDialog;
 use rcue::parser::parse_from_file;
+use rodio::buffer::SamplesBuffer;
 
 use psx::PSXEmulator;
 use psx::cdrom::disc::Disc;
+use rodio::OutputStream;
 
 use crate::app::BIOS_PATH;
 use crate::components::breakpoints::Breakpoints;
@@ -26,7 +29,7 @@ impl Control {
 		}
 	}
 
-	pub fn show(&mut self, ui: &mut Ui, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints) {
+	pub fn show(&mut self, ui: &mut Ui, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints, stream_handle: &mut OutputStream) {
 		ui.strong("Control");
 
 		ui.horizontal(|ui| {
@@ -50,13 +53,13 @@ impl Control {
 				let exe_path = self.select_file(("EXE File", &["exe", "ps-exe"]));
 
 				if let Some(exe) = exe_path {
-					self.reset_emu(psx, tty, breakpoints);
+					self.reset_emu(psx, tty, breakpoints, stream_handle);
 					psx.sideload_exe(fs::read(exe).unwrap());
 				}
 			}
 
 			if ui.button("Reset").clicked() {
-				self.reset_emu(psx, tty, breakpoints);
+				self.reset_emu(psx, tty, breakpoints, stream_handle);
 			}
 		});
 
@@ -98,9 +101,19 @@ impl Control {
 		psx.load_disc(disc);
 	}
 
-	pub fn reset_emu(&mut self, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints) {
+	pub fn reset_emu(&mut self, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints, stream_handle: &mut OutputStream) {
+		let sink = rodio::Sink::connect_new(&stream_handle.mixer());
+
+		let audio_callback = Box::new(move |buffer: Vec<f32>| {
+			if sink.len() > 2 {
+				std::thread::sleep(Duration::from_millis(1));
+			}
+
+			sink.append(SamplesBuffer::new(1, 44100, buffer));
+		});
+
 		let bios = fs::read(BIOS_PATH).unwrap();
-		*psx = PSXEmulator::new(bios);
+		*psx = PSXEmulator::new(bios, audio_callback);
 
 		tty.out_buf.clear();
 		breakpoints.breakpoints.clear();

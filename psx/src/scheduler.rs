@@ -1,10 +1,13 @@
-use std::collections::BinaryHeap;
+use std::{collections::BinaryHeap, i16};
 
 use crate::{bus::Bus, interrupts::InterruptFlag, cdrom::CmdResponse};
+
+const AUDIO_BUFFER_LEN: usize = 1024;
 
 #[derive(Clone, PartialEq)]
 pub enum EventType {
 	Vblank,
+	SpuTick,
 	TimerTarget(u8),
 	TimerOverflow(u8),
 	Sio0Irq,
@@ -51,13 +54,19 @@ impl PartialEq for SchedulerEvent {
 pub struct Scheduler {
 	event_queue: BinaryHeap<SchedulerEvent>,
 	pub cpu_cycle_counter: u64,
+
+	audio_buffer: Vec<f32>,
+	audio_callback: Box<dyn Fn(Vec<f32>)>,
 }
 
 impl Scheduler {
-	pub fn new() -> Self {
+	pub fn new(audio_callback: Box<dyn Fn(Vec<f32>)>) -> Self {
 		Self {
 			event_queue: BinaryHeap::new(),
 			cpu_cycle_counter: 0,
+
+			audio_buffer: Vec::new(),
+			audio_callback: audio_callback,
 		}
 	}
 
@@ -114,6 +123,20 @@ impl Scheduler {
 				//log::info!("triggered: {}", bus.interrupts.triggered());
 
 				self.schedule_event(SchedulerEvent::new(EventType::Vblank), 571212);
+			},
+			EventType::SpuTick => {
+				let sample = bus.spu.tick();
+
+				// convert to f32 PCM sample in [-1, 1] range
+				self.audio_buffer.push(f32::from(sample) / f32::from(i16::MAX));
+
+				if self.audio_buffer.len() >= AUDIO_BUFFER_LEN {
+					(self.audio_callback)(self.audio_buffer.clone());
+
+					self.audio_buffer.clear();
+				}
+
+				self.schedule_event(SchedulerEvent::new(EventType::SpuTick), 768);
 			}
 			EventType::TimerTarget(timer) => {
 				bus.timers.target_event(timer, self, &mut bus.interrupts);
