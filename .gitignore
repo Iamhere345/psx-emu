@@ -1,4 +1,5 @@
 /target
 /res
+/.idea
 *.log
 .DS_Store
