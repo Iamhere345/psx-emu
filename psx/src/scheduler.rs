@@ -2,7 +2,7 @@ use std::{collections::BinaryHeap, i16};
 
 use crate::{bus::Bus, interrupts::InterruptFlag, cdrom::CmdResponse};
 
-const AUDIO_BUFFER_LEN: usize = 1024;
+const AUDIO_BUFFER_LEN: usize = 735; // 44100hz / 60hz
 
 #[derive(Clone, PartialEq)]
 pub enum EventType {
@@ -55,6 +55,7 @@ pub struct Scheduler {
 	event_queue: BinaryHeap<SchedulerEvent>,
 	pub cpu_cycle_counter: u64,
 
+	pub buffer_full: bool,
 	audio_buffer: Vec<f32>,
 	audio_callback: Box<dyn Fn(Vec<f32>)>,
 }
@@ -66,6 +67,7 @@ impl Scheduler {
 			cpu_cycle_counter: 0,
 
 			audio_buffer: Vec::new(),
+			buffer_full: false,
 			audio_callback: audio_callback,
 		}
 	}
@@ -134,6 +136,7 @@ impl Scheduler {
 					(self.audio_callback)(self.audio_buffer.clone());
 
 					self.audio_buffer.clear();
+					self.buffer_full = true;
 				}
 
 				self.schedule_event(SchedulerEvent::new(EventType::SpuTick), 768);

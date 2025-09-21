@@ -87,7 +87,8 @@ impl PSXEmulator {
 
 			self.scheduler.handle_event(last_event.clone(), &mut self.bus);
 
-			if last_event.event_type == EventType::Vblank {
+			if self.scheduler.buffer_full {
+				self.scheduler.buffer_full = false;
 				break;
 			}
 

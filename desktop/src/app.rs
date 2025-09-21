@@ -45,6 +45,7 @@ pub struct FrontendState {
 	new_breakpoint_open: bool,
 
 	stream_handle: OutputStream,
+	//sink: Sink,
 }
 
 pub struct Desktop {
@@ -143,7 +144,7 @@ impl FrontendState {
 		let sink = rodio::Sink::connect_new(&stream_handle.mixer());
 		
 		let audio_callback = Box::new(move |buffer: Vec<f32>| {
-			if sink.len() > 2 {
+			while sink.len() > 2 {
 				std::thread::sleep(Duration::from_millis(1));
 			}
 

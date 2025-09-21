@@ -19,6 +19,7 @@ use crate::components::tty_logger::TTYLogger;
 pub struct Control {
 	pub paused: bool,
 	pub step: bool,
+	muted: bool,
 }
 
 impl Control {
@@ -26,6 +27,7 @@ impl Control {
 		Self {
 			paused: true,
 			step: false,
+			muted: false,
 		}
 	}
 
@@ -60,6 +62,10 @@ impl Control {
 
 			if ui.button("Reset").clicked() {
 				self.reset_emu(psx, tty, breakpoints, stream_handle);
+			}
+
+			if ui.checkbox(&mut self.muted, "Mute").changed() {
+				psx.bus.spu.emu_mute = self.muted;
 			}
 		});
 
@@ -105,7 +111,7 @@ impl Control {
 		let sink = rodio::Sink::connect_new(&stream_handle.mixer());
 
 		let audio_callback = Box::new(move |buffer: Vec<f32>| {
-			if sink.len() > 2 {
+			while sink.len() > 2 {
 				std::thread::sleep(Duration::from_millis(1));
 			}
 
