@@ -2,7 +2,7 @@ use std::{collections::BinaryHeap, i16};
 
 use crate::{bus::Bus, interrupts::InterruptFlag, cdrom::CmdResponse};
 
-const AUDIO_BUFFER_LEN: usize = 735; // 44100hz / 60hz
+const AUDIO_BUFFER_LEN: usize = 735 * 2; // 44100hz / 60hz * two channels (stereo)
 
 #[derive(Clone, PartialEq)]
 pub enum EventType {
@@ -127,10 +127,11 @@ impl Scheduler {
 				self.schedule_event(SchedulerEvent::new(EventType::Vblank), 571212);
 			},
 			EventType::SpuTick => {
-				let sample = bus.spu.tick();
+				let (sample_l, sample_r) = bus.spu.tick();
 
 				// convert to f32 PCM sample in [-1, 1] range
-				self.audio_buffer.push(f32::from(sample) / f32::from(i16::MAX));
+				self.audio_buffer.push(f32::from(sample_r) / f32::from(i16::MAX));
+				self.audio_buffer.push(f32::from(sample_l) / f32::from(i16::MAX));
 
 				if self.audio_buffer.len() >= AUDIO_BUFFER_LEN {
 					(self.audio_callback)(self.audio_buffer.clone());

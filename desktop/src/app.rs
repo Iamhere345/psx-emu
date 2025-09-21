@@ -148,7 +148,7 @@ impl FrontendState {
 				std::thread::sleep(Duration::from_millis(1));
 			}
 
-			sink.append(SamplesBuffer::new(1, 44100, buffer));
+			sink.append(SamplesBuffer::new(2, 44100, buffer));
 		});
 
 		#[allow(unused_mut)]

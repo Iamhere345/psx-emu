@@ -115,7 +115,7 @@ impl Control {
 				std::thread::sleep(Duration::from_millis(1));
 			}
 
-			sink.append(SamplesBuffer::new(1, 44100, buffer));
+			sink.append(SamplesBuffer::new(2, 44100, buffer));
 		});
 
 		let bios = fs::read(BIOS_PATH).unwrap();

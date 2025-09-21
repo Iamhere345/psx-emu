@@ -59,7 +59,7 @@ struct Voice {
 	sample_rate: u16,
 	pitch_counter: u16,
 	decode_buf_index: usize,
-	current_sample: i16,
+	current_sample: (i16, i16),
 
 	// 28 samples + 3 for interpolation
 	decode_buf: [i16; 31],
@@ -68,6 +68,9 @@ struct Voice {
 	older_sample: i16,
 	// used for gausian interpolation of output sample
 	oldest_sample: i16,
+
+	volume_l: i16,
+	volume_r: i16,
 }
 
 impl Voice {
@@ -103,7 +106,7 @@ impl Voice {
 		let samples = [
 			self.decode_buf[self.decode_buf_index - 3], 
 			self.decode_buf[self.decode_buf_index - 2], 
-			self.decode_buf[self.decode_buf_index - 1], 
+			self.decode_buf[self.decode_buf_index - 1],
 			self.decode_buf[self.decode_buf_index - 0],
 		];
 
@@ -112,8 +115,15 @@ impl Voice {
 		interp_value += ((i32::from(GAUSS_TABLE[0x100 + interp_index]) * i32::from(samples[2])) >> 15) as i16;
 		interp_value += ((i32::from(GAUSS_TABLE[interp_index]) * i32::from(samples[3])) >> 15) as i16;
 
-		self.current_sample = interp_value;
+		self.current_sample = self.apply_volume(interp_value);
 
+	}
+
+	fn apply_volume(&mut self, sample: i16) -> (i16, i16) {
+		// TODO ADSR volume
+
+		// TODO volume envelope
+		(apply_volume(sample, self.volume_l), apply_volume(sample, self.volume_r))
 	}
 
 	fn key_on(&mut self, sram: &[u8]) {
@@ -206,9 +216,9 @@ impl Voice {
 	fn read(&self, addr: u32) -> u16 {
 		match addr & 0xF {
 			// Volume L
-			0x0 => 0,
+			0x0 => self.volume_l as u16,
 			// Volume R
-			0x2 => 0,
+			0x2 => self.volume_r as u16,
 			// ADPCM Sample Rate
 			0x4 => self.sample_rate,
 			// ADPCM Start Address
@@ -228,9 +238,9 @@ impl Voice {
 	fn write(&mut self, addr: u32, write: u16) {
 		match addr & 0xF {
 			// Volume L
-			0x0 => {},
+			0x0 => self.volume_l = write as i16,
 			// Volume R
-			0x2 => {},
+			0x2 => self.volume_r = write as i16,
 			// ADPCM Sample Rate
 			0x4 => self.sample_rate = write,
 			// ADPCM Start Address
@@ -322,6 +332,9 @@ pub struct Spu {
 	start_sram_addr: u16,
 	current_sram_addr: usize,
 
+	volume_l: i16,
+	volume_r: i16,
+
 	pub emu_mute: bool,
 }
 
@@ -335,30 +348,41 @@ impl Spu {
 			start_sram_addr: 0,
 			current_sram_addr: 0,
 
+			volume_l: 0,
+			volume_r: 0,
+
 			emu_mute: false,
 		}
 	}
 
-	pub fn tick(&mut self) -> i16 {
+	pub fn tick(&mut self) -> (i16, i16) {
 		// update all voices
 		for voice in &mut self.voices {
 			voice.tick(&self.sram);
 		}
 
-		let mut mixed_sample: i32 = 0;
+		let mut mixed_l: i32 = 0;
+		let mut mixed_r: i32 = 0;
 
 		for voice in &self.voices {
 			if !voice.key_on {
 				continue;
 			}
 
-			mixed_sample += i32::from(voice.current_sample / 4);
+			let (sample_l, sample_r) = voice.current_sample;
+
+			mixed_l += i32::from(sample_l);
+			mixed_r += i32::from(sample_r);
 		}
 
 		if !self.emu_mute {
-			mixed_sample.clamp(-0x8000, 0x7FFF) as i16
+			let clamped_l = mixed_l.clamp(-0x8000, 0x7FFF) as i16;
+			let clamped_r = mixed_r.clamp(-0x8000, 0x7FFF) as i16;
+
+			//(clamped_l, clamped_r)
+			(apply_volume(clamped_l, self.volume_l), apply_volume(clamped_r, self.volume_r))
 		} else {
-			0
+			(0, 0)
 		}
 	}
 
@@ -371,6 +395,8 @@ impl Spu {
 				self.voices[voice_num as usize].read(addr)
 			},
 			// volume regs
+			0x1F801D80 => self.volume_l as u16,
+			0x1F801D82 => self.volume_r as u16,
 			0x1F801D80	 	..= 0x1F801D87 => 0,
 			// voice flags
 			0x1F801D88		..= 0x1F801D9F => 0,
@@ -402,6 +428,8 @@ impl Spu {
 				self.voices[voice_num as usize].write(addr, write);
 			},
 			// volume regs
+			0x1F801D80 => self.volume_l = write as i16,
+			0x1F801D82 => self.volume_r = write as i16,
 			0x1F801D80	 	..= 0x1F801D87 => {},
 			0x1F801DB0		..= 0x1F801DB4 => {},
 			// voice flags
@@ -482,4 +510,8 @@ impl Spu {
 			| (0 << 10) // data transfer busy flag
 			| (0 << 11) // writing to first/second half of capture buffers
 	}
+}
+
+fn apply_volume(sample: i16, volume: i16) -> i16 {
+	((i32::from(sample) * i32::from(volume)) >> 15) as i16
 }
