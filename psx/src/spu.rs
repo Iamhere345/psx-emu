@@ -47,10 +47,227 @@ const GAUSS_TABLE: &[i16; 512] = &[
     0x5997, 0x599E, 0x59A4, 0x59A9, 0x59AD, 0x59B0, 0x59B2, 0x59B3,
 ];
 
+const SRAM_MASK: usize = (512 * 1024) - 1;
+const ENVELOPE_COUNTER_MAX: u32 = 1 << (33 - 11);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TransferMode {
+	Stop = 0,
+	ManualWrite = 1,
+	DmaWrite = 2,
+	DmaRead = 3,
+}
+
+impl TransferMode {
+	fn from_bits(bits: u16) -> Self {
+		match bits {
+			0 => Self::Stop,
+			1 => Self::ManualWrite,
+			2 => Self::DmaWrite,
+			3 => Self::DmaRead,
+
+			_ => unreachable!(),
+		}
+	}
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum EnvelopeMode {
+	#[default]
+	Linear = 0,
+	Exponential = 1
+}
+
+impl EnvelopeMode {
+	fn from_bit(bit: bool) -> Self {
+		match bit {
+			false => Self::Linear,
+			true => Self::Exponential
+		}
+	}
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum EnvelopeDir {
+	#[default]
+	Increase = 0,
+	Decrease = 1,
+}
+
+impl EnvelopeDir {
+	fn from_bit(bit: bool) -> Self {
+		match bit {
+			false => Self::Increase,
+			true => Self::Decrease,
+		}
+	}
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum AdsrPhase {
+	Attack,
+	Decay,
+	Sustain,
+	#[default]
+	Release
+}
+
+#[derive(Default, Clone, Copy)]
+struct AdsrEnvelope {
+	level: i16,
+	phase: AdsrPhase,
+	counter: u32,
+
+	// attack settingss
+	attack_dir: EnvelopeDir,
+	attack_mode: EnvelopeMode,
+	attack_shift: u8,
+	attack_step: u8,
+
+	// decay settings
+	decay_dir: EnvelopeDir,
+	decay_mode: EnvelopeMode,
+	decay_shift: u8,
+	decay_step: u8,
+
+	// sustain settings
+	sustain_dir: EnvelopeDir,
+	sustain_mode: EnvelopeMode,
+	sustain_shift: u8,
+	sustain_step: u8,
+	sustain_level: u8,
+
+	// release settings
+	release_dir: EnvelopeDir,
+	release_mode: EnvelopeMode,
+	release_shift: u8,
+	release_step: u8,
+}
+
+impl AdsrEnvelope {
+	fn new() -> Self {
+		Self {
+			level: 0,
+			phase: AdsrPhase::Release,
+			counter: 0,
+
+			attack_dir: EnvelopeDir::Increase,		// fixed
+			attack_mode: EnvelopeMode::Linear,		// configurable
+			attack_shift: 11,						// configurable (0-31)
+			attack_step: 0,							// configurable (0-3, interpreted as 7-N)
+			
+			decay_dir: EnvelopeDir::Decrease,		// fixed
+			decay_mode: EnvelopeMode::Exponential,	// fixed
+			decay_shift: 11,						// configurable (0-15)
+			decay_step: 0,							// fixed (interpreted as -8)
+
+			sustain_dir: EnvelopeDir::Decrease,		// configurable
+			sustain_mode: EnvelopeMode::Linear,		// configurable
+			sustain_shift: 11,						// configurable (0-31)
+			sustain_step: 0,						// configurable (0-3, interpreted as 7-N or -(8-N) depending on direction)
+			sustain_level: 0,
+
+			release_dir: EnvelopeDir::Decrease,		// fixed
+			release_mode: EnvelopeMode::Linear,		// configurable
+			release_shift: 11,						// configurable (0-31)
+			release_step: 0,						// fixed (interpreted as -8)
+		}
+	}
+
+	fn key_on(&mut self) {
+		self.level = 0;
+		self.phase = AdsrPhase::Attack;
+	}
+
+	fn key_off(&mut self) {
+		self.phase = AdsrPhase::Release;
+	}
+
+	fn tick(&mut self) {
+		self.check_for_phase_transition();
+
+		let (dir, mode, shift, step) = match self.phase {
+			AdsrPhase::Attack => (self.attack_dir, self.attack_mode, self.attack_shift, self.attack_step),
+			AdsrPhase::Decay => (self.decay_dir, self.decay_mode, self.decay_shift, self.decay_step),
+			AdsrPhase::Sustain => (self.sustain_dir, self.sustain_mode, self.sustain_shift, self.sustain_step),
+			AdsrPhase::Release => (self.release_dir, self.release_mode, self.release_shift, self.release_step),
+		};
+
+		let mut counter_dec = ENVELOPE_COUNTER_MAX >> shift.saturating_sub(11);
+
+		if dir == EnvelopeDir::Increase && mode == EnvelopeMode::Exponential && self.level > 0x6000 {
+			counter_dec >>= 2;
+		}
+
+		self.counter = self.counter.saturating_sub(counter_dec);
+		if self.counter == 0 {
+			self.counter = ENVELOPE_COUNTER_MAX;
+
+			let mut step = i32::from(7 - step);
+			if dir == EnvelopeDir::Decrease {
+				step = !step;
+			}
+
+			step <<= 11_u8.saturating_sub(shift);
+
+			if dir == EnvelopeDir::Decrease && mode == EnvelopeMode::Exponential {
+				step = (step * i32::from(self.level)) >> 15;
+			}
+
+			self.level = (i32::from(self.level) + step).clamp(0, 0x7FFF) as i16;
+		}
+
+	}
+
+	fn check_for_phase_transition(&mut self) {
+		if self.phase == AdsrPhase::Attack && self.level == 0x7FFF {
+			self.phase = AdsrPhase::Decay;
+		}
+
+		if self.phase == AdsrPhase::Decay && self.level <= ((i16::from(self.sustain_level) + 1 ) * 0x800) {
+			self.phase = AdsrPhase::Sustain;
+		}
+	}
+
+	fn read_low(&self) -> u16 {
+		// sustain level?
+		(self.sustain_level as u16)
+			| (self.decay_shift as u16) << 4
+			| (self.attack_step as u16) << 8
+			| (self.attack_shift as u16) << 10
+			| (self.attack_mode as u16) << 15
+	}
+
+	fn write_low(&mut self, write: u16) {
+		self.sustain_level = (write & 0xF) as u8;
+		self.decay_shift = ((write >> 4) & 0xF) as u8;
+		self.attack_step = ((write >> 8) & 3) as u8;
+		self.attack_shift = ((write >> 10) & 0x1F) as u8;
+		self.attack_mode = EnvelopeMode::from_bit((write >> 15) & 1 != 0);
+	}
+
+	fn read_high(&self) -> u16 {
+		(self.release_shift as u16) << 0
+			| (self.release_mode as u16) << 5
+			| (self.sustain_step as u16) << 6
+			| (self.sustain_shift as u16) << 8
+			| (self.sustain_dir as u16) << 14
+			| (self.sustain_mode as u16) << 15
+	}
+
+	fn write_high(&mut self, write: u16) {
+		self.release_shift = (write & 0x1F) as u8;
+		self.release_mode = EnvelopeMode::from_bit((write >> 5) & 1 != 0);
+		self.sustain_step = ((write >> 6) & 3) as u8;
+		self.sustain_shift = ((write >> 8) & 0x1F) as u8;
+		self.sustain_dir = EnvelopeDir::from_bit((write >> 14) & 1 != 0);
+		self.sustain_mode = EnvelopeMode::from_bit((write >> 15) & 1 != 0);
+	}
+}
 
 #[derive(Default, Clone, Copy)]
 struct Voice {
-	key_on: bool,
+	adsr: AdsrEnvelope,
 
 	current_addr: usize,
 	start_addr: usize,
@@ -76,6 +293,8 @@ struct Voice {
 impl Voice {
 	fn new() -> Self {
 		Self {
+			adsr: AdsrEnvelope::new(),
+
 			decode_buf_index: 3,
 
 			..Default::default()
@@ -84,6 +303,8 @@ impl Voice {
 
 	fn tick(&mut self, sram: &[u8]) {
 		// TODO pitch modulation
+		self.adsr.tick();
+
 		self.pitch_counter += self.sample_rate.min(0x4000);
 
 		// every 0x1000 steps (44100hz) increment index of sample to play
@@ -120,26 +341,26 @@ impl Voice {
 	}
 
 	fn apply_volume(&mut self, sample: i16) -> (i16, i16) {
-		// TODO ADSR volume
+		let adsr_sample = apply_volume(sample, self.adsr.level);
 
 		// TODO volume envelope
-		(apply_volume(sample, self.volume_l), apply_volume(sample, self.volume_r))
+		(apply_volume(adsr_sample, self.volume_l), apply_volume(adsr_sample, self.volume_r))
 	}
 
 	fn key_on(&mut self, sram: &[u8]) {
-		// TODO reset envelope
+		self.adsr.key_on();
+
+		trace!("keyon - start: 0x{:X} repeat 0x{:X}", self.start_addr, self.repeat_addr);
+
 		self.current_addr = self.start_addr;
 		self.pitch_counter = 0;
 		self.decode_buf_index = 3;
 
 		self.decode_next_block(sram);
-
-		self.key_on = true;
 	}
 
 	fn key_off(&mut self) {
-		// TODO
-		self.key_on = false;
+		self.adsr.key_off();
 	}
 
 	fn decode_next_block(&mut self, sram: &[u8]) {
@@ -208,7 +429,7 @@ impl Voice {
 				self.key_off();
 			}
 		} else {
-			self.current_addr = (self.current_addr + 16) & ((512 * 1024) - 1);
+			self.current_addr = (self.current_addr + 16) & SRAM_MASK;
 		}
 
 	}
@@ -222,15 +443,15 @@ impl Voice {
 			// ADPCM Sample Rate
 			0x4 => self.sample_rate,
 			// ADPCM Start Address
-			0x6 => (self.start_addr as u16) >> 3,
+			0x6 => (self.start_addr >> 3) as u16,
 			// ADSR low
-			0x8 => 0,
+			0x8 => self.adsr.read_low(),
 			// ADSR high
-			0xA => 0,
+			0xA => self.adsr.read_high(),
 			// ADSR current volume
-			0xC => 0,
+			0xC => self.adsr.level as u16,
 			// ADPCM Repeat Address
-			0xE => (self.repeat_addr as u16) >> 3,
+			0xE => (self.repeat_addr >> 3) as u16,
 			_ => unimplemented!("SPU Voice read 0x{:X}", addr & 0xF),
 		}
 	}
@@ -244,28 +465,28 @@ impl Voice {
 			// ADPCM Sample Rate
 			0x4 => self.sample_rate = write,
 			// ADPCM Start Address
-			0x6 => self.start_addr = (write << 3) as usize,
+			0x6 => self.start_addr = (write as usize) << 3,
 			// ADSR low
-			0x8 => {},
+			0x8 => self.adsr.write_low(write),
 			// ADSR high
-			0xA => {},
+			0xA => self.adsr.write_high(write),
 			// ADSR current volume
-			0xC => {},
+			0xC => self.adsr.level = write as i16,
 			// ADPCM Repeat Address
-			0xE => self.repeat_addr = (write << 3) as usize,
+			0xE => self.repeat_addr = (write as usize) << 3,
 			_ => unimplemented!("[0x{:X}] SPU voice write 0x{write:X}", addr & 0xF),
 		}
 	}
 }
 
 struct SpuControlRegister {
-	spu_enable: bool,			// doesnt apply to CD audio
-	mute_spu: bool,				// doesnt apply to CD audio
-	noise_freq_shift: u8,		// 0..0Fh = low-high frequency
-	noise_freq_step: u8,		// 0..03h = Step "4,5,6,7"
+	spu_enable: bool,					// doesnt apply to CD audio
+	mute_spu: bool,						// doesnt apply to CD audio
+	noise_freq_shift: u8,				// 0..0Fh = low-high frequency
+	noise_freq_step: u8,				// 0..03h = Step "4,5,6,7"
 	reverb_master_enable: bool,
-	irq_enable: bool,			// 0=Disabled/Acknowledge, 1=Enabled; only when Bit15=1
-	sram_transfer_mode: u8,		// 0=Stop, 1=ManualWrite, 2=DMAwrite, 3=DMAread
+	irq_enable: bool,					// 0=Disabled/Acknowledge, 1=Enabled; only when Bit15=1
+	transfer_mode: TransferMode,	// 0=Stop, 1=ManualWrite, 2=DMAwrite, 3=DMAread
 	ext_audio_reverb: bool,
 	cd_audio_reverb: bool,
 	ext_audio_enable: bool,
@@ -281,7 +502,7 @@ impl SpuControlRegister {
 			noise_freq_step: 0,
 			reverb_master_enable: false,
 			irq_enable: false,
-			sram_transfer_mode: 0,
+			transfer_mode: TransferMode::Stop,
 			ext_audio_reverb: false,
 			cd_audio_reverb: false,
 			ext_audio_enable: false,
@@ -294,11 +515,11 @@ impl SpuControlRegister {
 			| (u16::from(self.ext_audio_enable) << 1)
 			| (u16::from(self.cd_audio_reverb) << 2)
 			| (u16::from(self.ext_audio_reverb) << 3)
-			| (u16::from(self.sram_transfer_mode) << 5)
+			| (u16::from(self.transfer_mode as u16) << 4)
 			| (u16::from(self.irq_enable) << 6)
 			| (u16::from(self.reverb_master_enable) << 7)
-			| (u16::from(self.noise_freq_step) << 9)
-			| (u16::from(self.noise_freq_shift) << 13)
+			| (u16::from(self.noise_freq_step) << 8)
+			| (u16::from(self.noise_freq_shift) << 10)
 			| (u16::from(self.mute_spu) << 14)
 			| (u16::from(self.spu_enable) << 15)
 	}
@@ -309,13 +530,13 @@ impl SpuControlRegister {
 		self.cd_audio_reverb = (write >> 2) & 1 != 0;
 		self.ext_audio_reverb = (write >> 3) & 1 != 0;
 
-		self.sram_transfer_mode = ((write >> 5) & 3) as u8;
+		self.transfer_mode = TransferMode::from_bits((write >> 4) & 3);
 
 		self.irq_enable = (write >> 6) & 1 != 0;
 		self.reverb_master_enable = (write >> 7) & 1 != 0;
 
-		self.noise_freq_step = ((write >> 9) & 3) as u8;
-		self.noise_freq_shift = ((write >> 13) & 0xF) as u8;
+		self.noise_freq_step = ((write >> 8) & 3) as u8;
+		self.noise_freq_shift = ((write >> 10) & 0xF) as u8;
 
 		self.mute_spu = (write >> 14) & 1 != 0;
 		self.spu_enable = (write >> 15) & 1 != 0;
@@ -327,6 +548,8 @@ impl SpuControlRegister {
 pub struct Spu {
 	control: SpuControlRegister,
 	voices: [Voice; 24],
+
+	transfer_control: u16,
 
 	sram: Vec<u8>, 
 	start_sram_addr: u16,
@@ -343,6 +566,8 @@ impl Spu {
 		Self {
 			control: SpuControlRegister::new(),
 			voices: [Voice::new(); 24],
+
+			transfer_control: 0x4, // should always be 0x4
 
 			sram: vec![0; 512 * 1024], // 512K of sound ram
 			start_sram_addr: 0,
@@ -365,10 +590,6 @@ impl Spu {
 		let mut mixed_r: i32 = 0;
 
 		for voice in &self.voices {
-			if !voice.key_on {
-				continue;
-			}
-
 			let (sample_l, sample_r) = voice.current_sample;
 
 			mixed_l += i32::from(sample_l);
@@ -405,13 +626,13 @@ impl Spu {
 			// Control Register (SPUCNT)
 			0x1F801DAA => self.control.read(),
 			// Sound RAM Data Transfer Control (should be 0004h)
-			0x1F801DAC => 4,
+			0x1F801DAC => self.transfer_control,
 			// Status Register (SPUSTAT)
 			0x1F801DAE => self.read_stat(),
 			// unused?
 			0x1F801E80 		..= 0x1F801FFF => 0,
 
-			_ => { warn!("[0x{addr:08X}] Unknown SPU register read"); 0}
+			_ => { /* warn!("[0x{addr:08X}] Unknown SPU register read"); */ 0}
 		}
 	}
 
@@ -424,6 +645,8 @@ impl Spu {
 			// voice regs
 			0x1F801C00 		..= 0x1F801D7F => {
 				let voice_num = (addr >> 4) & 0x1F;
+
+				trace!("[0x{addr:X}] write voice{voice_num} 0x{write:X}");
 
 				self.voices[voice_num as usize].write(addr, write);
 			},
@@ -441,24 +664,23 @@ impl Spu {
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => {
 				self.start_sram_addr = write;
-				self.current_sram_addr = (self.start_sram_addr << 3) as usize;
+				self.current_sram_addr = (self.start_sram_addr as usize) << 3;
 			},
 			// Control Register (SPUCNT)
 			0x1F801DAA => self.control.write(write),
 			// Sound RAM Data Transfer Fifo
 			0x1F801DA8 => self.write_sram(write),
-			// Sound RAM Data Transfer Control (stubbed)
-			0x1F801DAC => {},
+			// Sound RAM Data Transfer Control
+			0x1F801DAC => self.transfer_control = write,
 			// Status Register (SPUSTAT)
 			0x1F801DAE => {}, // SPUSTAT is technically writeable but written bits are cleared shortly after being written
 			// unused?
 			0x1F801E80 		..= 0x1F801FFF => {},
 
-			_ => warn!("[0x{addr:08X}] Unknown SPU register write 0x{write:X}")
+			_ => {}//warn!("[0x{addr:08X}] Unknown SPU register write 0x{write:X}")
 		}
 	}
 
-	// not sure if i have this in the right order
 	pub fn write32(&mut self, addr: u32, write: u32) {
 		self.write16(addr, (write >> 16) as u16);
 		self.write16(addr + 2, write as u16);
@@ -470,7 +692,16 @@ impl Spu {
 		self.sram[self.current_sram_addr] = bytes[0];
 		self.sram[self.current_sram_addr + 1] = bytes[1];
 
-		self.current_sram_addr += 2;
+		self.current_sram_addr = (self.current_sram_addr + 2) & SRAM_MASK;
+	}
+
+	pub fn read_sram(&mut self) -> u16 {
+		let low = self.sram[self.current_sram_addr];
+		let high = self.sram[self.current_sram_addr + 1];
+
+		self.current_sram_addr = (self.current_sram_addr + 2) & SRAM_MASK;
+
+		u16::from_le_bytes([low, high])
 	}
 	
 	fn write_keyon(&mut self, write: u16, is_high: bool) {
@@ -481,6 +712,7 @@ impl Spu {
 
 		for voice in start..end {
 			if (write >> (voice - start)) & 1 != 0 {
+				//debug!("voice {voice} key on");
 				self.voices[voice].key_on(&self.sram);
 			}
 		}
@@ -504,9 +736,9 @@ impl Spu {
 		(self.control.read() & 0x3F)
 			| (0 << 6) // IRQ flag
 			// data transfer DMA read/write request
-			| (u16::from(self.control.sram_transfer_mode & 2) << 7)
-			| (0 << 8) // data transfer DMA write request
-			| (0 << 9) // data transfer dma read request
+			| ((self.control.transfer_mode as u16 & 2) << 7)
+			| (u16::from(self.control.transfer_mode == TransferMode::DmaWrite) << 8) // data transfer DMA write request
+			| (u16::from(self.control.transfer_mode == TransferMode::DmaRead) << 9) // data transfer dma read request
 			| (0 << 10) // data transfer busy flag
 			| (0 << 11) // writing to first/second half of capture buffers
 	}

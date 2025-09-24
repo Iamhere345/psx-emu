@@ -166,7 +166,11 @@ impl Channel {
 			_ => true
 		};
 
-		self.transfer_active && trigger
+		trace!("DMA{} active ({} && {})", self.channel_num, self.transfer_active, trigger);
+		
+		// TODO check which is more accurate
+		//self.transfer_active && trigger
+		self.transfer_active
 	}
 }
 
@@ -333,7 +337,7 @@ impl DmaController {
 		match addr {
 			// channel registers
 			0x1F801080	..= 0x1F8010EF => {
-				trace!("[0x{addr:X}] DMA{channel} read32");
+				//trace!("[0x{addr:X}] DMA{channel} read32");
 				self.channels[channel as usize].read32(addr)
 			},
 			// DMA control
@@ -573,6 +577,10 @@ impl Bus {
 							// stubbed
 							0xFF
 						},
+						CHANNEL_SPU => {
+							u32::from(self.spu.read_sram())
+								| u32::from(self.spu.read_sram()) << 16
+						}
 						_ => todo!("ToRam DMA{channel_num} mode {:?}", channel.sync_mode),
 					};
 					

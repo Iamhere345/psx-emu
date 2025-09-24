@@ -283,10 +283,10 @@ impl Timer {
 			},
 			ClockSource::SystemDiv => {
 				return (cycles as u64) * 8;
-			}
+			},
 			ClockSource::Hblank => {
 				return (f64::from(cycles) * 3.2 * 853.0) as u64;
-			}
+			},
 			_ => todo!("{:?}", self.clock_src)
 		}
 	}
