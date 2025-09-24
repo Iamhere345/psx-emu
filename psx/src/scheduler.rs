@@ -130,8 +130,8 @@ impl Scheduler {
 				let (sample_l, sample_r) = bus.spu.tick();
 
 				// convert to f32 PCM sample in [-1, 1] range
-				self.audio_buffer.push(f32::from(sample_r) / f32::from(i16::MAX));
 				self.audio_buffer.push(f32::from(sample_l) / f32::from(i16::MAX));
+				self.audio_buffer.push(f32::from(sample_r) / f32::from(i16::MAX));
 
 				if self.audio_buffer.len() >= AUDIO_BUFFER_LEN {
 					(self.audio_callback)(self.audio_buffer.clone());

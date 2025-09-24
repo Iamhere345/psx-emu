@@ -47,6 +47,9 @@ const GAUSS_TABLE: &[i16; 512] = &[
     0x5997, 0x599E, 0x59A4, 0x59A9, 0x59AD, 0x59B0, 0x59B2, 0x59B3,
 ];
 
+const ADPCM_POS_FILTER: [i32; 5] = [0, 60, 115, 98, 122];
+const ADPCM_NEG_FILTER: [i32; 5] = [0, 0, -52, -55, -60];
+
 const SRAM_MASK: usize = (512 * 1024) - 1;
 const ENVELOPE_COUNTER_MAX: u32 = 1 << (33 - 11);
 
@@ -224,7 +227,7 @@ impl AdsrEnvelope {
 			self.phase = AdsrPhase::Decay;
 		}
 
-		if self.phase == AdsrPhase::Decay && self.level <= ((i16::from(self.sustain_level) + 1 ) * 0x800) {
+		if self.phase == AdsrPhase::Decay && (self.level as u16) <= ((u16::from(self.sustain_level & 0xF) + 1) << 11) {
 			self.phase = AdsrPhase::Sustain;
 		}
 	}
@@ -269,6 +272,8 @@ impl AdsrEnvelope {
 struct Voice {
 	adsr: AdsrEnvelope,
 
+	end_x: bool,
+
 	current_addr: usize,
 	start_addr: usize,
 	repeat_addr: usize,
@@ -278,13 +283,13 @@ struct Voice {
 	decode_buf_index: usize,
 	current_sample: (i16, i16),
 
-	// 28 samples + 3 for interpolation
-	decode_buf: [i16; 31],
+	// 28 samples
+	decode_buf: [i16; 28],
+	// 4 last decoded samples for interpolation
+	old_samples: [i16; 4],
 
 	old_sample: i16,
 	older_sample: i16,
-	// used for gausian interpolation of output sample
-	oldest_sample: i16,
 
 	volume_l: i16,
 	volume_r: i16,
@@ -295,7 +300,7 @@ impl Voice {
 		Self {
 			adsr: AdsrEnvelope::new(),
 
-			decode_buf_index: 3,
+			decode_buf_index: 0,
 
 			..Default::default()
 		}
@@ -314,27 +319,25 @@ impl Voice {
 			self.decode_buf_index += 1;
 
 			// decode new block if the end of the current block is reached
-			if self.decode_buf_index == 31 {
-				self.decode_buf_index = 3;
+			if self.decode_buf_index == 28 {
+				self.decode_buf_index = 0;
 				self.decode_next_block(sram);
 			}
+
+			self.old_samples[3] = self.old_samples[2];
+			self.old_samples[2] = self.old_samples[1];
+			self.old_samples[1] = self.old_samples[0];
+			self.old_samples[0] = self.decode_buf[self.decode_buf_index];
 		}
 
 		// gaussian interpolation
 		// index into gauss table uses bits 4-11 of pitch ounter
 		let interp_index = ((self.pitch_counter >> 4) & 0xFF) as usize;
 
-		let samples = [
-			self.decode_buf[self.decode_buf_index - 3], 
-			self.decode_buf[self.decode_buf_index - 2], 
-			self.decode_buf[self.decode_buf_index - 1],
-			self.decode_buf[self.decode_buf_index - 0],
-		];
-
-		let mut interp_value = ((i32::from(GAUSS_TABLE[0xFF - interp_index]) * i32::from(samples[0])) >> 15) as i16;
-		interp_value += ((i32::from(GAUSS_TABLE[0x1FF - interp_index]) * i32::from(samples[1])) >> 15) as i16;
-		interp_value += ((i32::from(GAUSS_TABLE[0x100 + interp_index]) * i32::from(samples[2])) >> 15) as i16;
-		interp_value += ((i32::from(GAUSS_TABLE[interp_index]) * i32::from(samples[3])) >> 15) as i16;
+		let mut interp_value = apply_volume(GAUSS_TABLE[0xFF - interp_index], self.old_samples[3]);
+		interp_value += apply_volume(GAUSS_TABLE[0x1FF - interp_index], self.old_samples[2]);
+		interp_value += apply_volume(GAUSS_TABLE[0x100 + interp_index], self.old_samples[1]);
+		interp_value += apply_volume(GAUSS_TABLE[interp_index], self.old_samples[0]);
 
 		self.current_sample = self.apply_volume(interp_value);
 
@@ -350,6 +353,8 @@ impl Voice {
 	fn key_on(&mut self, sram: &[u8]) {
 		self.adsr.key_on();
 
+		self.end_x = false;
+
 		trace!("keyon - start: 0x{:X} repeat 0x{:X}", self.start_addr, self.repeat_addr);
 
 		self.current_addr = self.start_addr;
@@ -364,11 +369,6 @@ impl Voice {
 	}
 
 	fn decode_next_block(&mut self, sram: &[u8]) {
-		// save last samples from last block
-		self.decode_buf[2] = self.decode_buf[30];
-		self.decode_buf[1] = self.decode_buf[29];
-		self.decode_buf[0] = self.decode_buf[28];
-
 		let block = &sram[self.current_addr..self.current_addr + 16];
 
 		// decode shift/filter from header
@@ -379,9 +379,12 @@ impl Voice {
 		// 0-4 different filter values
 		let filter = ((block[0] >> 4) & 0x7).min(4);
 
+		let filter_0 = ADPCM_POS_FILTER[filter as usize];
+		let filter_1 = ADPCM_NEG_FILTER[filter as usize];
+
 		for sample_i in 0..28 {
 			let sample_byte = block[2 + sample_i / 2];
-			let sample_nibble = (sample_byte >> (4 * sample_i % 2)) & 0xF;
+			let sample_nibble = (sample_byte >> (4 * (sample_i % 2))) & 0xF;
 
 			// sign-extend to i32
 			let raw_sample = (((sample_nibble as i8) << 4) >> 4) as i32;
@@ -391,24 +394,12 @@ impl Voice {
 			let old = self.old_sample as i32;
 			let older = self.older_sample as i32;
 
-			let filtered_sample = match filter {
-				// no filter
-				0 => shifted_sample,
-				// filter using old sample
-				1 => shifted_sample + (60 * old + 32) / 64,
-				// filter using old and older sample
-				2 => shifted_sample + (115 * old - 52 * older + 32) / 64,
-    			3 => shifted_sample + (98 * old - 55 * older + 32) / 64,
-				4 => shifted_sample + (122 * old - 60 * older + 32) / 64,
-
-				_ => unreachable!(),
-			};
+			let filtered_sample = shifted_sample + (filter_0 * old + filter_1 * older + 32) / 64;
 
 			let clamped_sample = filtered_sample.clamp(-0x8000, 0x7FFF) as i16;
-			self.decode_buf[sample_i + 3] = clamped_sample;
+			self.decode_buf[sample_i] = clamped_sample;
 
 			// update old and older samples
-			self.oldest_sample = self.older_sample;
 			self.older_sample = self.old_sample;
 			self.old_sample = clamped_sample;
 		}
@@ -424,9 +415,11 @@ impl Voice {
 
 		if loop_end {
 			self.current_addr = self.repeat_addr;
+			self.end_x = true;
 
 			if !loop_repeat {
 				self.key_off();
+				self.adsr.level = 0;
 			}
 		} else {
 			self.current_addr = (self.current_addr + 16) & SRAM_MASK;
@@ -600,7 +593,6 @@ impl Spu {
 			let clamped_l = mixed_l.clamp(-0x8000, 0x7FFF) as i16;
 			let clamped_r = mixed_r.clamp(-0x8000, 0x7FFF) as i16;
 
-			//(clamped_l, clamped_r)
 			(apply_volume(clamped_l, self.volume_l), apply_volume(clamped_r, self.volume_r))
 		} else {
 			(0, 0)
@@ -620,6 +612,8 @@ impl Spu {
 			0x1F801D82 => self.volume_r as u16,
 			0x1F801D80	 	..= 0x1F801D87 => 0,
 			// voice flags
+			0x1F801D9C => self.read_endx(false),
+			0x1F801D9E => self.read_endx(true),
 			0x1F801D88		..= 0x1F801D9F => 0,
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => self.start_sram_addr,
@@ -682,8 +676,8 @@ impl Spu {
 	}
 
 	pub fn write32(&mut self, addr: u32, write: u32) {
-		self.write16(addr, (write >> 16) as u16);
-		self.write16(addr + 2, write as u16);
+		self.write16(addr, write as u16);
+		self.write16(addr + 2, (write >> 16) as u16);
 	}
 
 	pub fn write_sram(&mut self, write: u16) {
@@ -703,6 +697,21 @@ impl Spu {
 
 		u16::from_le_bytes([low, high])
 	}
+
+	fn read_endx(&self, is_high: bool) -> u16 {
+		let mut result = 0;
+
+		let (start, end) = match is_high {
+			true => (16, 23),
+			false => (0, 16),
+		};
+
+		for voice in start..end {
+			result |= u16::from(self.voices[voice].end_x) << (voice - start);
+		}
+
+		result
+	}
 	
 	fn write_keyon(&mut self, write: u16, is_high: bool) {
 		let (start, end) = match is_high {
@@ -710,9 +719,11 @@ impl Spu {
 			false => (0, 16),
 		};
 
+		trace!("keyon {is_high} 0b{write:b}");
+
 		for voice in start..end {
 			if (write >> (voice - start)) & 1 != 0 {
-				//debug!("voice {voice} key on");
+				trace!("voice {voice} key on");
 				self.voices[voice].key_on(&self.sram);
 			}
 		}
@@ -726,6 +737,7 @@ impl Spu {
 
 		for voice in start..end {
 			if (write >> (voice - start)) & 1 != 0 {
+				trace!("voice {voice} key off");
 				self.voices[voice].key_off();
 			}
 		}

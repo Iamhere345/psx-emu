@@ -109,6 +109,7 @@ impl Control {
 
 	pub fn reset_emu(&mut self, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints, stream_handle: &mut OutputStream) {
 		let sink = rodio::Sink::connect_new(&stream_handle.mixer());
+		sink.set_volume(3.0);
 
 		let audio_callback = Box::new(move |buffer: Vec<f32>| {
 			while sink.len() > 2 {
