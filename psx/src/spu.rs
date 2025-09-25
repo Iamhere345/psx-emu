@@ -107,6 +107,102 @@ impl EnvelopeDir {
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum SweepPhase {
+	#[default]
+	Positive = 0,
+	Negative = 1,
+}
+
+impl SweepPhase {
+	fn from_bit(bit: bool) -> Self {
+		match bit {
+			true => Self::Negative,
+			false => Self::Positive
+		}
+	}
+}
+
+#[derive(Default, Clone, Copy)]
+struct SweepEnvelope {
+	level: i16,
+	counter: u32,
+	envelope_enabled: bool,
+
+	dir: EnvelopeDir,
+	mode: EnvelopeMode,
+	phase: SweepPhase,
+	shift: u8,
+	step: u8,
+}
+
+impl SweepEnvelope {
+	fn tick(&mut self) {
+		if !self.envelope_enabled {
+			return;
+		}
+
+		let mut counter_dec = ENVELOPE_COUNTER_MAX >> self.shift.saturating_sub(11);
+
+		if self.dir == EnvelopeDir::Increase && self.mode == EnvelopeMode::Exponential && self.level > 0x6000 {
+			counter_dec >>= 2;
+		}
+
+		self.counter = self.counter.saturating_sub(counter_dec);
+		if self.counter == 0 {
+			self.counter = ENVELOPE_COUNTER_MAX;
+
+			let mut step = i32::from(7 - self.step);
+			if (self.dir == EnvelopeDir::Decrease) ^ (self.phase == SweepPhase::Negative) {
+				step = !step;
+			}
+
+			step <<= 11_u8.saturating_sub(self.shift);
+
+			if self.dir == EnvelopeDir::Decrease && self.mode == EnvelopeMode::Exponential {
+				step = (step * i32::from(self.level)) >> 15;
+			}
+
+			let new_level = i32::from(self.level) + step;
+			self.level = if self.dir != EnvelopeDir::Decrease {
+				new_level.clamp(-0x8000, 0x7FFF) as i16
+			} else if self.phase == SweepPhase::Negative {
+				new_level.clamp(-0x8000, 0) as i16
+			} else {
+				new_level.clamp(0, 0x7FFF) as i16
+			}
+		}
+
+	}
+
+	fn read(&self) -> u16 {
+		if self.envelope_enabled {
+			(self.step as u16)
+				| (self.shift as u16) << 2
+				| (self.phase as u16) << 12
+				| (self.dir as u16) << 13
+				| (self.mode as u16) << 14
+				| (self.envelope_enabled as u16) << 15
+		} else {
+			(self.level >> 1) as u16
+		}
+	}
+
+	fn write(&mut self, write: u16) {
+		self.envelope_enabled = (write >> 15) & 1 != 0;
+
+		if self.envelope_enabled {
+			self.step = (write & 3) as u8;
+			self.shift = ((write >> 2) & 0x1F) as u8;
+			self.phase = SweepPhase::from_bit((write >> 12) & 1 != 0);
+			self.dir = EnvelopeDir::from_bit((write >> 13) & 1 != 0);
+			self.mode = EnvelopeMode::from_bit((write >> 14) & 1 != 0);
+		} else {
+			self.level = (write << 1) as i16;
+		}
+	}
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum AdsrPhase {
 	Attack,
 	Decay,
@@ -291,8 +387,8 @@ struct Voice {
 	old_sample: i16,
 	older_sample: i16,
 
-	volume_l: i16,
-	volume_r: i16,
+	volume_l: SweepEnvelope,
+	volume_r: SweepEnvelope,
 }
 
 impl Voice {
@@ -346,8 +442,11 @@ impl Voice {
 	fn apply_volume(&mut self, sample: i16) -> (i16, i16) {
 		let adsr_sample = apply_volume(sample, self.adsr.level);
 
+		self.volume_l.tick();
+		self.volume_r.tick();
+
 		// TODO volume envelope
-		(apply_volume(adsr_sample, self.volume_l), apply_volume(adsr_sample, self.volume_r))
+		(apply_volume(adsr_sample, self.volume_l.level), apply_volume(adsr_sample, self.volume_r.level))
 	}
 
 	fn key_on(&mut self, sram: &[u8]) {
@@ -430,9 +529,9 @@ impl Voice {
 	fn read(&self, addr: u32) -> u16 {
 		match addr & 0xF {
 			// Volume L
-			0x0 => self.volume_l as u16,
+			0x0 => self.volume_l.read(),
 			// Volume R
-			0x2 => self.volume_r as u16,
+			0x2 => self.volume_r.read(),
 			// ADPCM Sample Rate
 			0x4 => self.sample_rate,
 			// ADPCM Start Address
@@ -452,9 +551,9 @@ impl Voice {
 	fn write(&mut self, addr: u32, write: u16) {
 		match addr & 0xF {
 			// Volume L
-			0x0 => self.volume_l = write as i16,
+			0x0 => self.volume_l.write(write),
 			// Volume R
-			0x2 => self.volume_r = write as i16,
+			0x2 => self.volume_r.write(write),
 			// ADPCM Sample Rate
 			0x4 => self.sample_rate = write,
 			// ADPCM Start Address
@@ -548,8 +647,8 @@ pub struct Spu {
 	start_sram_addr: u16,
 	current_sram_addr: usize,
 
-	volume_l: i16,
-	volume_r: i16,
+	volume_l: SweepEnvelope,
+	volume_r: SweepEnvelope,
 
 	pub emu_mute: bool,
 }
@@ -566,8 +665,8 @@ impl Spu {
 			start_sram_addr: 0,
 			current_sram_addr: 0,
 
-			volume_l: 0,
-			volume_r: 0,
+			volume_l: SweepEnvelope::default(),
+			volume_r: SweepEnvelope::default(),
 
 			emu_mute: false,
 		}
@@ -578,6 +677,10 @@ impl Spu {
 		for voice in &mut self.voices {
 			voice.tick(&self.sram);
 		}
+
+		// update sweep envelopes
+		self.volume_l.tick();
+		self.volume_r.tick();
 
 		let mut mixed_l: i32 = 0;
 		let mut mixed_r: i32 = 0;
@@ -593,7 +696,7 @@ impl Spu {
 			let clamped_l = mixed_l.clamp(-0x8000, 0x7FFF) as i16;
 			let clamped_r = mixed_r.clamp(-0x8000, 0x7FFF) as i16;
 
-			(apply_volume(clamped_l, self.volume_l), apply_volume(clamped_r, self.volume_r))
+			(apply_volume(clamped_l, self.volume_l.level), apply_volume(clamped_r, self.volume_r.level))
 		} else {
 			(0, 0)
 		}
@@ -608,8 +711,8 @@ impl Spu {
 				self.voices[voice_num as usize].read(addr)
 			},
 			// volume regs
-			0x1F801D80 => self.volume_l as u16,
-			0x1F801D82 => self.volume_r as u16,
+			0x1F801D80 => self.volume_l.read(),
+			0x1F801D82 => self.volume_r.read(),
 			0x1F801D80	 	..= 0x1F801D87 => 0,
 			// voice flags
 			0x1F801D9C => self.read_endx(false),
@@ -645,8 +748,8 @@ impl Spu {
 				self.voices[voice_num as usize].write(addr, write);
 			},
 			// volume regs
-			0x1F801D80 => self.volume_l = write as i16,
-			0x1F801D82 => self.volume_r = write as i16,
+			0x1F801D80 => self.volume_l.write(write),
+			0x1F801D82 => self.volume_r.write(write),
 			0x1F801D80	 	..= 0x1F801D87 => {},
 			0x1F801DB0		..= 0x1F801DB4 => {},
 			// voice flags

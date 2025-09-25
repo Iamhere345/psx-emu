@@ -140,12 +140,7 @@ impl FrontendState {
 	pub fn new(cc: &CreationContext) -> Self {
 		let bios = std::fs::read(BIOS_PATH).unwrap();
 
-		//let stream_handle = rodio::OutputStreamBuilder::open_default_stream().expect("open default audio stream");
-		let stream_handle = rodio::OutputStreamBuilder::from_default_device().unwrap()
-			.with_sample_format(rodio::cpal::SampleFormat::I16)
-			.with_sample_rate(44100)
-			.open_stream()
-			.unwrap();
+		let stream_handle = rodio::OutputStreamBuilder::open_default_stream().expect("open default audio stream");
 
 		// TODO adjustable volume
 		let sink = rodio::Sink::connect_new(&stream_handle.mixer());
@@ -159,7 +154,7 @@ impl FrontendState {
 			sink.append(SamplesBuffer::new(2, 44100, buffer));
 		});
 
-		#[allow(unused_mut)]
+		#[allow(unused_mut)] 
 		let mut psx = PSXEmulator::new(bios, audio_callback);
 		Self {
 			psx: psx,
