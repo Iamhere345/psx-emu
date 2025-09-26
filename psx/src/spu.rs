@@ -50,7 +50,8 @@ const GAUSS_TABLE: &[i16; 512] = &[
 const ADPCM_POS_FILTER: [i32; 5] = [0, 60, 115, 98, 122];
 const ADPCM_NEG_FILTER: [i32; 5] = [0, 0, -52, -55, -60];
 
-const SRAM_MASK: usize = (512 * 1024) - 1;
+const SRAM_LEN: usize = 512 * 1024;
+const SRAM_MASK: usize = SRAM_LEN - 1;
 const ENVELOPE_COUNTER_MAX: u32 = 1 << (33 - 11);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -640,8 +641,12 @@ impl SpuControlRegister {
 pub struct Spu {
 	control: SpuControlRegister,
 	voices: [Voice; 24],
-
+	
 	transfer_control: u16,
+	
+	reverb: Reverb,
+	even_tick: bool,
+	reverb_counter: u8,
 
 	sram: Vec<u8>, 
 	start_sram_addr: u16,
@@ -658,8 +663,11 @@ impl Spu {
 		Self {
 			control: SpuControlRegister::new(),
 			voices: [Voice::new(); 24],
+			reverb: Reverb::default(),
 
 			transfer_control: 0x4, // should always be 0x4
+			even_tick: true,
+			reverb_counter: 0,
 
 			sram: vec![0; 512 * 1024], // 512K of sound ram
 			start_sram_addr: 0,
@@ -673,6 +681,8 @@ impl Spu {
 	}
 
 	pub fn tick(&mut self) -> (i16, i16) {
+		self.even_tick = !self.even_tick;
+
 		// update all voices
 		for voice in &mut self.voices {
 			voice.tick(&self.sram);
@@ -682,15 +692,32 @@ impl Spu {
 		self.volume_l.tick();
 		self.volume_r.tick();
 
+		let mut reverb_l: i32 = 0;
+		let mut reverb_r: i32 = 0;
+
 		let mut mixed_l: i32 = 0;
 		let mut mixed_r: i32 = 0;
 
-		for voice in &self.voices {
+		for (i, voice) in self.voices.iter().enumerate() {
 			let (sample_l, sample_r) = voice.current_sample;
 
 			mixed_l += i32::from(sample_l);
 			mixed_r += i32::from(sample_r);
+
+			if self.reverb.reverb_enabled[i] {
+				reverb_l += i32::from(sample_l);
+				reverb_r += i32::from(sample_r);
+			}
 		}
+
+		if self.even_tick {
+			let (reverb_out_l, reverb_out_r) = self.reverb.tick(reverb_l, reverb_r, &mut self.sram);
+
+			mixed_l += i32::from(reverb_out_l);
+			mixed_r += i32::from(reverb_out_r);
+		}
+
+		self.reverb_counter = (self.reverb_counter + 1) & 1;
 
 		if !self.emu_mute {
 			let clamped_l = mixed_l.clamp(-0x8000, 0x7FFF) as i16;
@@ -717,6 +744,8 @@ impl Spu {
 			// voice flags
 			0x1F801D9C => self.read_endx(false),
 			0x1F801D9E => self.read_endx(true),
+			0x1F801D98 => self.reverb.read_reverb_enabled(false),
+			0x1F801D9A => self.reverb.read_reverb_enabled(true),
 			0x1F801D88		..= 0x1F801D9F => 0,
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => self.start_sram_addr,
@@ -724,6 +753,8 @@ impl Spu {
 			0x1F801DAA => self.control.read(),
 			// Sound RAM Data Transfer Control (should be 0004h)
 			0x1F801DAC => self.transfer_control,
+			// Reverb registers
+			0x1F801DC0		..= 0x1F801DFF => self.reverb.read(addr),
 			// Status Register (SPUSTAT)
 			0x1F801DAE => self.read_stat(),
 			// unused?
@@ -750,13 +781,16 @@ impl Spu {
 			// volume regs
 			0x1F801D80 => self.volume_l.write(write),
 			0x1F801D82 => self.volume_r.write(write),
-			0x1F801D80	 	..= 0x1F801D87 => {},
+			0x1F801D84 => self.reverb.volume_l = write as i16, 
+			0x1F801D86 => self.reverb.volume_r = write as i16,
 			0x1F801DB0		..= 0x1F801DB4 => {},
 			// voice flags
 			0x1F801D88 => self.write_keyon(write, false),
 			0x1F801D8A => self.write_keyon(write, true),
 			0x1F801D8C => self.write_keyoff(write, false),
 			0x1F801D8E => self.write_keyoff(write, true),
+			0x1F801D98 => self.reverb.write_reverb_enabled(write, false),
+			0x1F801D9A => self.reverb.write_reverb_enabled(write, true),
 			0x1F801D90		..= 0x1F801D9F => {},
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => {
@@ -765,12 +799,19 @@ impl Spu {
 			},
 			// Control Register (SPUCNT)
 			0x1F801DAA => self.control.write(write),
+			// Reverb work area base address
+			0x1F801DA2 => {
+				self.reverb.base_addr = (write as usize) << 3;
+				self.reverb.current_addr = self.reverb.base_addr;
+			}
 			// Sound RAM Data Transfer Fifo
 			0x1F801DA8 => self.write_sram(write),
 			// Sound RAM Data Transfer Control
 			0x1F801DAC => self.transfer_control = write,
 			// Status Register (SPUSTAT)
 			0x1F801DAE => {}, // SPUSTAT is technically writeable but written bits are cleared shortly after being written
+			// Reverb registers
+			0x1F801DC0		..= 0x1F801DFF => self.reverb.write(addr, write),
 			// unused?
 			0x1F801E80 		..= 0x1F801FFF => {},
 
@@ -859,6 +900,256 @@ impl Spu {
 	}
 }
 
+#[allow(non_snake_case)]
+#[derive(Default)]
+struct Reverb {
+	reverb_enabled: [bool; 24],
+
+	volume_l: i16,
+	volume_r: i16,
+	base_addr: usize,
+	current_addr: usize,
+
+	// APF offsets (disp)
+	dAPF1: usize,
+	dAPF2: usize,
+
+	// filter volume
+	vIIR: i32,		// reflection volume 1
+	vCOMB1: i32,	// comb volume 1-4
+	vCOMB2: i32,
+	vCOMB3: i32,
+	vCOMB4: i32,
+	vWALL: i32,		// reflection volume 2
+	vAPF1: i32,		// APF volume 1-2
+	vAPF2: i32,
+
+	// filter address (src/dst)
+	mLSAME: usize,	// same side reflection address 1 L/R
+	mRSAME: usize,
+	mLCOMB1: usize,	// comb address 1-2 L/R
+	mRCOMB1: usize,
+	mLCOMB2: usize,
+	mRCOMB2: usize,
+	dLSAME: usize,	// same side reflection address 2 L/R
+	dRSAME: usize,
+	mLDIFF: usize,	// different side reflection address 1 L/R
+	mRDIFF: usize,
+	mLCOMB3: usize,	// comb address 3-4 L/R
+	mRCOMB3: usize,
+	mLCOMB4: usize,
+	mRCOMB4: usize,
+	dLDIFF: usize,	// different side reflection address 2 L/R
+	dRDIFF: usize,
+	mLAPF1: usize,	// APF address 1-2 L/R
+	mRAPF1: usize,
+	mLAPF2: usize,
+	mRAPF2: usize,
+
+	// reverb input volume L/R
+	vLIN: i32,
+	vRIN: i32,
+}
+
+impl Reverb {
+	fn read(&self, addr: u32) -> u16 {
+		match addr & 0xFFFF {
+			// APF offsets
+			0x1DC0 => (self.dAPF1 >> 3) as u16,
+			0x1DC2 => (self.dAPF2 >> 3) as u16,
+			// volume
+			0x1DC4 => self.vIIR as u16,
+			0x1DC6 => self.vCOMB1 as u16,
+			0x1DC8 => self.vCOMB2 as u16,
+			0x1DCA => self.vCOMB3 as u16,
+			0x1DCC => self.vCOMB4 as u16,
+			0x1DCE => self.vWALL as u16,
+			0x1DD0 => self.vAPF1 as u16,
+			0x1DD2 => self.vAPF2 as u16,
+			// addresses
+			0x1DD4 => (self.mLSAME >> 3) as u16,
+			0x1DD6 => (self.mRSAME >> 3) as u16,
+			0x1DD8 => (self.mLCOMB1 >> 3) as u16,
+			0x1DDA => (self.mRCOMB1 >> 3) as u16,
+			0x1DDC => (self.mLCOMB2 >> 3) as u16,
+			0x1DDE => (self.mRCOMB2 >> 3) as u16,
+			0x1DE0 => (self.dLSAME >> 3) as u16,
+			0x1DE2 => (self.dRSAME >> 3) as u16,
+			0x1DE4 => (self.mLDIFF >> 3) as u16,
+			0x1DE6 => (self.mRDIFF >> 3) as u16,
+			0x1DE8 => (self.mLCOMB3 >> 3) as u16,
+			0x1DEA => (self.mRCOMB3 >> 3) as u16,
+			0x1DEC => (self.mLCOMB4 >> 3) as u16,
+			0x1DEE => (self.mRCOMB4 >> 3) as u16,
+			0x1DF0 => (self.dLDIFF >> 3) as u16,
+			0x1DF2 => (self.dRDIFF >> 3) as u16,
+			0x1DF4 => (self.mLAPF1 >> 3) as u16,
+			0x1DF6 => (self.mRAPF1 >> 3) as u16,
+			0x1DF8 => (self.mLAPF2 >> 3) as u16,
+			0x1DFA => (self.mRAPF2 >> 3) as u16,
+			// input volume
+			0x1DFC => self.vLIN as u16,
+			0x1DFE => self.vRIN as u16,
+
+			_ => unreachable!(),
+		}
+	}
+
+	fn write(&mut self, addr: u32, write: u16) {
+		match addr & 0xFFFF {
+			// APF offsets
+			0x1DC0 => self.dAPF1 = (write as usize) << 3,
+			0x1DC2 => self.dAPF2 = (write as usize) << 3,
+			// volume
+			0x1DC4 => self.vIIR = write as i16 as i32,
+			0x1DC6 => self.vCOMB1 = write as i16 as i32,
+			0x1DC8 => self.vCOMB2 = write as i16 as i32,
+			0x1DCA => self.vCOMB3 = write as i16 as i32,
+			0x1DCC => self.vCOMB4 = write as i16 as i32,
+			0x1DCE => self.vWALL = write as i16 as i32,
+			0x1DD0 => self.vAPF1 = write as i16 as i32,
+			0x1DD2 => self.vAPF2 = write as i16 as i32,
+			// addresses
+			0x1DD4 => self.mLSAME = (write as usize) << 3,
+			0x1DD6 => self.mRSAME = (write as usize) << 3,
+			0x1DD8 => self.mLCOMB1 = (write as usize) << 3,
+			0x1DDA => self.mRCOMB1 = (write as usize) << 3,
+			0x1DDC => self.mLCOMB2 = (write as usize) << 3,
+			0x1DDE => self.mRCOMB2 = (write as usize) << 3,
+			0x1DE0 => self.dLSAME = (write as usize) << 3,
+			0x1DE2 => self.dRSAME = (write as usize) << 3,
+			0x1DE4 => self.mLDIFF = (write as usize) << 3,
+			0x1DE6 => self.mRDIFF = (write as usize) << 3,
+			0x1DE8 => self.mLCOMB3 = (write as usize) << 3,
+			0x1DEA => self.mRCOMB3 = (write as usize) << 3,
+			0x1DEC => self.mLCOMB4 = (write as usize) << 3,
+			0x1DEE => self.mRCOMB4 = (write as usize) << 3,
+			0x1DF0 => self.dLDIFF = (write as usize) << 3,
+			0x1DF2 => self.dRDIFF = (write as usize) << 3,
+			0x1DF4 => self.mLAPF1 = (write as usize) << 3,
+			0x1DF6 => self.mRAPF1 = (write as usize) << 3,
+			0x1DF8 => self.mLAPF2 = (write as usize) << 3,
+			0x1DFA => self.mRAPF2 = (write as usize) << 3,
+			// input volume
+			0x1DFC => self.vLIN = write as i32,
+			0x1DFE => self.vRIN = write as i32,
+
+			_ => unreachable!(),
+		}
+	}
+
+	fn read_reverb_enabled(&self, is_high: bool) -> u16 {
+		let (start, end) = match is_high {
+			false => (0, 16),
+			true => (16, 24),
+		};
+
+		let mut result = 0;
+
+		for i in start..end {
+			result |= u16::from(self.reverb_enabled[i]) << i - start;
+		}
+
+		result
+	}
+
+	fn write_reverb_enabled(&mut self, write: u16, is_high: bool) {
+		let (start, end) = match is_high {
+			false => (0, 16),
+			true => (16, 24),
+		};
+
+		for i in start..end {
+			self.reverb_enabled[i] = (write >> i - start) & 1 != 0;
+		}
+	}
+
+	fn tick(&mut self, sample_l: i32, sample_r: i32, sram: &mut Vec<u8>) -> (i16, i16) {
+		let input_l = apply_volume_i32(sample_l, self.vLIN);
+		let input_r = apply_volume_i32(sample_r, self.vRIN);
+
+		// same side reflection filter
+		self.reflection_filter(input_l, self.mLSAME, self.dLSAME, sram);
+		self.reflection_filter(input_r, self.mRSAME, self.dRSAME, sram);
+
+		// different side reflection filter
+		self.reflection_filter(input_r, self.mLDIFF, self.dRDIFF, sram);
+		self.reflection_filter(input_l, self.mRDIFF, self.dLDIFF, sram);
+
+		// comb filter
+		let comb_l = self.comb_filter(self.mLCOMB1, self.mLCOMB2, self.mLCOMB3, self.mLCOMB4, sram);
+		let comb_r = self.comb_filter(self.mRCOMB1, self.mRCOMB2, self.mRCOMB3, self.mRCOMB4, sram);
+
+		// all pass filter 1
+		let apf1_l = self.all_pass_filter(comb_l, self.mLAPF1, self.dAPF1, self.vAPF1, sram);
+		let apf1_r = self.all_pass_filter(comb_r, self.mRAPF1, self.dAPF1, self.vAPF1, sram);
+
+		// all pass filter 2
+		let apf2_l = saturate_sample(self.all_pass_filter(apf1_l, self.mLAPF2, self.dAPF2, self.vAPF2, sram));
+		let apf2_r =  saturate_sample(self.all_pass_filter(apf1_r, self.mRAPF2, self.dAPF2, self.vAPF2, sram));
+		
+		self.current_addr = (self.current_addr.wrapping_add(2) & SRAM_MASK).max(self.base_addr);
+
+		(apply_volume(apf2_l, self.volume_l), apply_volume(apf2_r, self.volume_r))
+	}
+
+	fn reflection_filter(&mut self, sample: i32, m_addr: usize, d_addr: usize, sram: &mut Vec<u8>) {
+		let m_sample = self.read_reverb(m_addr.wrapping_sub(2), sram);
+		let d_sample = self.read_reverb(d_addr, sram);
+
+		let write = m_sample 
+			+ apply_volume_i32(
+				saturate_sample(sample + apply_volume_i32(d_sample, self.vWALL) - m_sample) as i32, 
+				self.vIIR
+			);
+
+		self.write_reverb(m_addr, saturate_sample(write) as u16, sram);
+	}
+
+	fn comb_filter(&mut self, m_comb1: usize, m_comb2: usize, m_comb3: usize, m_comb4: usize, sram: &mut Vec<u8>) -> i32 {
+		let comb = apply_volume_i32(self.read_reverb(m_comb1, sram), self.vCOMB1)
+			+ apply_volume_i32(self.read_reverb(m_comb2, sram), self.vCOMB2)
+			+ apply_volume_i32(self.read_reverb(m_comb3, sram), self.vCOMB3)
+			+ apply_volume_i32(self.read_reverb(m_comb4, sram), self.vCOMB4);
+
+		saturate_sample(comb) as i32
+	}
+
+	fn all_pass_filter(&mut self, sample: i32, m_apf: usize, d_apf: usize, v_apf: i32, sram: &mut Vec<u8>) -> i32 {
+		let apf_input_sample = self.read_reverb(m_apf.wrapping_sub(d_apf), sram);
+		let apf_new_sample = saturate_sample(sample as i32 - apply_volume_i32(apf_input_sample, v_apf));
+
+		self.write_reverb(m_apf, apf_new_sample as u16, sram);
+
+		apf_input_sample + (apply_volume_i32(apf_new_sample as i32, v_apf))
+	}
+
+	fn read_reverb(&self, addr: usize, sram: &mut Vec<u8>) -> i32 {
+		let offset =  (self.current_addr - self.base_addr).wrapping_add(addr) % (SRAM_LEN - self.base_addr);
+		let read_addr = self.base_addr.wrapping_add(offset);
+
+		i16::from_le_bytes([sram[read_addr], sram[read_addr + 1]]) as i32
+	}
+	
+	fn write_reverb(&mut self, addr: usize, write: u16, sram: &mut Vec<u8>) {
+		let offset =  (self.current_addr - self.base_addr).wrapping_add(addr) % (SRAM_LEN - self.base_addr);
+		let write_addr = self.base_addr.wrapping_add(offset);
+		
+		let [lsb, msb] = write.to_le_bytes();
+
+		sram[write_addr] = lsb;
+		sram[write_addr + 1] = msb;
+	}
+}
+
 fn apply_volume(sample: i16, volume: i16) -> i16 {
 	((i32::from(sample) * i32::from(volume)) >> 15) as i16
+}
+
+fn apply_volume_i32(sample: i32, volume: i32) -> i32 {
+	(sample * volume) >> 15
+}
+
+fn saturate_sample(sample: i32) -> i16 {
+	sample.clamp(-0x8000, 0x7FFF) as i16
 }
