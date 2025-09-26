@@ -1,4 +1,8 @@
+use std::{cell::Cell, ops::{Index, IndexMut, Range}};
+
 use log::*;
+
+use crate::interrupts::Interrupts;
 
 // Table for 4-Point Gaussian Interpolation
 const GAUSS_TABLE: &[i16; 512] = &[
@@ -53,6 +57,11 @@ const ADPCM_NEG_FILTER: [i32; 5] = [0, 0, -52, -55, -60];
 const SRAM_LEN: usize = 512 * 1024;
 const SRAM_MASK: usize = SRAM_LEN - 1;
 const ENVELOPE_COUNTER_MAX: u32 = 1 << (33 - 11);
+
+const CDL_BUF_START: usize = 0x0;
+const CDR_BUF_START: usize = 0x400;
+const VOICE1_BUF_START: usize = 0x800;
+const VOICE3_BUF_START: usize = 0xC00;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TransferMode {
@@ -381,7 +390,7 @@ struct Voice {
 	pitch_counter: u16,
 	decode_buf_index: usize,
 
-	modulation_sample: i16,
+	mono_sample: i16,
 	current_sample: (i16, i16),
 
 	// 28 samples
@@ -407,7 +416,7 @@ impl Voice {
 		}
 	}
 
-	fn tick(&mut self, sram: &[u8], prev_sample: i16) {
+	fn tick(&mut self, sram: &SoundRam, prev_sample: i16) {
 		self.adsr.tick();
 
 		// pitch modulation
@@ -455,7 +464,7 @@ impl Voice {
 	fn apply_volume(&mut self, sample: i16) -> (i16, i16) {
 		let adsr_sample = apply_volume(sample, self.adsr.level);
 
-		self.modulation_sample = adsr_sample;
+		self.mono_sample = adsr_sample;
 
 		self.volume_l.tick();
 		self.volume_r.tick();
@@ -464,7 +473,7 @@ impl Voice {
 		(apply_volume(adsr_sample, self.volume_l.level), apply_volume(adsr_sample, self.volume_r.level))
 	}
 
-	fn key_on(&mut self, sram: &[u8]) {
+	fn key_on(&mut self, sram: &SoundRam) {
 		self.adsr.key_on();
 
 		self.end_x = false;
@@ -482,7 +491,7 @@ impl Voice {
 		self.adsr.key_off();
 	}
 
-	fn decode_next_block(&mut self, sram: &[u8]) {
+	fn decode_next_block(&mut self, sram: &SoundRam) {
 		let block = &sram[self.current_addr..self.current_addr + 16];
 
 		// decode shift/filter from header
@@ -586,6 +595,78 @@ impl Voice {
 	}
 }
 
+struct SoundRam {
+	ram: Vec<u8>, // 512K of sound ram
+
+	irq_enabled: bool,
+	irq_addr: usize,
+
+	irq: Cell<bool>,
+	last_irq: bool,
+}
+
+impl SoundRam {
+	fn new() -> Self {
+		Self {
+			ram: vec![0; 512 * 1024],
+
+			irq_enabled: false,
+			irq_addr: 0,
+
+			irq: Cell::new(false),
+			last_irq: false,
+		}
+	}
+
+	fn read16(&self, addr: usize) -> u16 {
+		let low = self.ram[addr];
+		let high = self.ram[addr + 1];
+
+		u16::from_le_bytes([low, high])
+	}
+
+	fn write16(&mut self, addr: usize, write: u16) {
+		let bytes = u16::to_le_bytes(write);
+
+		self.ram[addr] = bytes[0];
+		self.ram[addr + 1] = bytes[1];
+	}
+}
+
+impl Index<usize> for SoundRam {
+	type Output = u8;
+
+	fn index(&self, index: usize) -> &Self::Output {
+		if self.irq_enabled && index == self.irq_addr {
+			self.irq.set(true);
+		}
+
+		&self.ram[index]
+	}
+}
+
+impl Index<Range<usize>> for SoundRam {
+	type Output = [u8];
+
+	fn index(&self, index: Range<usize>) -> &Self::Output {
+		if self.irq_enabled && index.contains(&self.irq_addr) {
+			self.irq.set(true);
+		}
+
+		&self.ram[index]
+	}
+}
+
+impl IndexMut<usize> for SoundRam {
+	fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+		if self.irq_enabled && index == self.irq_addr {
+			self.irq.set(true);
+		}
+
+		&mut self.ram[index]
+	}
+}
+
 struct SpuControlRegister {
 	spu_enable: bool,					// doesnt apply to CD audio
 	mute_spu: bool,						// doesnt apply to CD audio
@@ -631,7 +712,7 @@ impl SpuControlRegister {
 			| (u16::from(self.spu_enable) << 15)
 	}
 
-	fn write(&mut self, write: u16, noise: &mut NoiseGenerator) {
+	fn write(&mut self, write: u16, noise: &mut NoiseGenerator, sram: &mut SoundRam) {
 		self.cd_audio_enable = write & 1 != 0;
 		self.ext_audio_enable = (write >> 1) & 1 != 0;
 		self.cd_audio_reverb = (write >> 2) & 1 != 0;
@@ -640,6 +721,12 @@ impl SpuControlRegister {
 		self.transfer_mode = TransferMode::from_bits((write >> 4) & 3);
 
 		self.irq_enable = (write >> 6) & 1 != 0;
+
+		// writing 0 to irq enable acknowledges the irq
+		if self.irq_enable == false {
+			sram.irq.set(false);
+		}
+
 		self.reverb_master_enable = (write >> 7) & 1 != 0;
 
 		self.noise_freq_step = ((write >> 8) & 3) as u8;
@@ -668,9 +755,11 @@ pub struct Spu {
 	
 	even_tick: bool,
 
-	sram: Vec<u8>, 
+	sram: SoundRam, 
 	start_sram_addr: u16,
 	current_sram_addr: usize,
+
+	capture_buf_index: usize,
 
 	volume_l: SweepEnvelope,
 	volume_r: SweepEnvelope,
@@ -693,9 +782,11 @@ impl Spu {
 			transfer_control: 0x4, // should always be 0x4
 			even_tick: true,
 
-			sram: vec![0; 512 * 1024], // 512K of sound ram
+			sram: SoundRam::new(),
 			start_sram_addr: 0,
 			current_sram_addr: 0,
+
+			capture_buf_index: 0,
 
 			volume_l: SweepEnvelope::default(),
 			volume_r: SweepEnvelope::default(),
@@ -704,7 +795,7 @@ impl Spu {
 		}
 	}
 
-	pub fn tick(&mut self) -> (i16, i16) {
+	pub fn tick(&mut self, interrupts: &mut Interrupts) -> (i16, i16) {
 		self.even_tick = !self.even_tick;
 
 		// update all voices
@@ -712,8 +803,18 @@ impl Spu {
 		for voice in &mut self.voices {
 			voice.tick(&self.sram, prev_sample);
 
-			prev_sample = voice.modulation_sample;
+			prev_sample = voice.mono_sample;
 		}
+
+		// write to capture buffers
+		// CD L/R buffer (write 0 since it isn't implemented yet)
+		self.sram.write16(CDL_BUF_START + self.capture_buf_index, 0);
+		self.sram.write16(CDR_BUF_START + self.capture_buf_index, 0);
+		// Voice 1/3 buffer
+		self.sram.write16(VOICE1_BUF_START + self.capture_buf_index, self.voices[1].mono_sample as u16);
+		self.sram.write16(VOICE3_BUF_START + self.capture_buf_index, self.voices[3].mono_sample as u16);
+
+		self.capture_buf_index =  (self.capture_buf_index + 2) & 0x3FF;
 
 		// update sweep envelopes
 		self.volume_l.tick();
@@ -750,6 +851,14 @@ impl Spu {
 			mixed_r += i32::from(reverb_out_r);
 		}
 
+		// check for IRQ
+		if !self.sram.last_irq && self.sram.irq.get() {
+			trace!("IRQ9");
+			interrupts.raise_interrupt(crate::interrupts::InterruptFlag::Spu);
+		}
+
+		self.sram.last_irq = self.sram.irq.get();
+
 		if !self.emu_mute {
 			let clamped_l = mixed_l.clamp(-0x8000, 0x7FFF) as i16;
 			let clamped_r = mixed_r.clamp(-0x8000, 0x7FFF) as i16;
@@ -782,6 +891,8 @@ impl Spu {
 			0x1F801D98 => self.read_reverb_enabled(false),
 			0x1F801D9A => self.read_reverb_enabled(true),
 			0x1F801D9C		..= 0x1F801D9F => 0,
+			// Sound RAM IRQ address
+			0x1F801DA4 => self.sram.irq_addr as u16,
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => self.start_sram_addr,
 			// Control Register (SPUCNT)
@@ -831,13 +942,15 @@ impl Spu {
 			0x1F801D98 => self.write_reverb_enabled(write, false),
 			0x1F801D9A => self.write_reverb_enabled(write, true),
 			0x1F801D9C		..= 0x1F801D9F => {},
+			// Sound RAM IRQ address
+			0x1F801DA4 => self.sram.irq_addr = write as usize,
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => {
 				self.start_sram_addr = write;
 				self.current_sram_addr = (self.start_sram_addr as usize) << 3;
 			},
 			// Control Register (SPUCNT)
-			0x1F801DAA => self.control.write(write, &mut self.noise),
+			0x1F801DAA => self.control.write(write, &mut self.noise, &mut self.sram),
 			// Reverb work area base address
 			0x1F801DA2 => {
 				self.reverb.base_addr = (write as usize) << 3;
@@ -864,21 +977,17 @@ impl Spu {
 	}
 
 	pub fn write_sram(&mut self, write: u16) {
-		let bytes = u16::to_le_bytes(write);
-
-		self.sram[self.current_sram_addr] = bytes[0];
-		self.sram[self.current_sram_addr + 1] = bytes[1];
+		self.sram.write16(self.current_sram_addr, write);
 
 		self.current_sram_addr = (self.current_sram_addr + 2) & SRAM_MASK;
 	}
 
 	pub fn read_sram(&mut self) -> u16 {
-		let low = self.sram[self.current_sram_addr];
-		let high = self.sram[self.current_sram_addr + 1];
+		let read = self.sram.read16(self.current_sram_addr);
 
 		self.current_sram_addr = (self.current_sram_addr + 2) & SRAM_MASK;
 
-		u16::from_le_bytes([low, high])
+		read
 	}
 
 	fn read_endx(&self, is_high: bool) -> u16 {
@@ -1198,7 +1307,7 @@ impl Reverb {
 		}
 	}
 
-	fn tick(&mut self, sample_l: i32, sample_r: i32, sram: &mut Vec<u8>) -> (i16, i16) {
+	fn tick(&mut self, sample_l: i32, sample_r: i32, sram: &mut SoundRam) -> (i16, i16) {
 		let input_l = apply_volume_i32(sample_l, self.vLIN);
 		let input_r = apply_volume_i32(sample_r, self.vRIN);
 
@@ -1227,7 +1336,7 @@ impl Reverb {
 		(apply_volume(apf2_l, self.volume_l), apply_volume(apf2_r, self.volume_r))
 	}
 
-	fn reflection_filter(&mut self, sample: i32, m_addr: usize, d_addr: usize, sram: &mut Vec<u8>) {
+	fn reflection_filter(&mut self, sample: i32, m_addr: usize, d_addr: usize, sram: &mut SoundRam) {
 		let m_sample = self.read_reverb(m_addr.wrapping_sub(2), sram);
 		let d_sample = self.read_reverb(d_addr, sram);
 
@@ -1240,7 +1349,7 @@ impl Reverb {
 		self.write_reverb(m_addr, saturate_sample(write) as u16, sram);
 	}
 
-	fn comb_filter(&mut self, m_comb1: usize, m_comb2: usize, m_comb3: usize, m_comb4: usize, sram: &mut Vec<u8>) -> i32 {
+	fn comb_filter(&mut self, m_comb1: usize, m_comb2: usize, m_comb3: usize, m_comb4: usize, sram: &mut SoundRam) -> i32 {
 		let comb = apply_volume_i32(self.read_reverb(m_comb1, sram), self.vCOMB1)
 			+ apply_volume_i32(self.read_reverb(m_comb2, sram), self.vCOMB2)
 			+ apply_volume_i32(self.read_reverb(m_comb3, sram), self.vCOMB3)
@@ -1249,7 +1358,7 @@ impl Reverb {
 		saturate_sample(comb) as i32
 	}
 
-	fn all_pass_filter(&mut self, sample: i32, m_apf: usize, d_apf: usize, v_apf: i32, sram: &mut Vec<u8>) -> i32 {
+	fn all_pass_filter(&mut self, sample: i32, m_apf: usize, d_apf: usize, v_apf: i32, sram: &mut SoundRam) -> i32 {
 		let apf_input_sample = self.read_reverb(m_apf.wrapping_sub(d_apf), sram);
 		let apf_new_sample = saturate_sample(sample as i32 - apply_volume_i32(apf_input_sample, v_apf));
 
@@ -1258,14 +1367,14 @@ impl Reverb {
 		apf_input_sample + (apply_volume_i32(apf_new_sample as i32, v_apf))
 	}
 
-	fn read_reverb(&self, addr: usize, sram: &mut Vec<u8>) -> i32 {
+	fn read_reverb(&self, addr: usize, sram: &mut SoundRam) -> i32 {
 		let offset =  (self.current_addr - self.base_addr).wrapping_add(addr) % (SRAM_LEN - self.base_addr);
 		let read_addr = self.base_addr.wrapping_add(offset);
 
 		i16::from_le_bytes([sram[read_addr], sram[read_addr + 1]]) as i32
 	}
 	
-	fn write_reverb(&mut self, addr: usize, write: u16, sram: &mut Vec<u8>) {
+	fn write_reverb(&mut self, addr: usize, write: u16, sram: &mut SoundRam) {
 		let offset =  (self.current_addr - self.base_addr).wrapping_add(addr) % (SRAM_LEN - self.base_addr);
 		let write_addr = self.base_addr.wrapping_add(offset);
 		
