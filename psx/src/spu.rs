@@ -617,7 +617,7 @@ impl SpuControlRegister {
 			| (u16::from(self.spu_enable) << 15)
 	}
 
-	fn write(&mut self, write: u16) {
+	fn write(&mut self, write: u16, noise: &mut NoiseGenerator) {
 		self.cd_audio_enable = write & 1 != 0;
 		self.ext_audio_enable = (write >> 1) & 1 != 0;
 		self.cd_audio_reverb = (write >> 2) & 1 != 0;
@@ -631,6 +631,8 @@ impl SpuControlRegister {
 		self.noise_freq_step = ((write >> 8) & 3) as u8;
 		self.noise_freq_shift = ((write >> 10) & 0xF) as u8;
 
+		noise.write(self.noise_freq_shift, self.noise_freq_step);
+
 		self.mute_spu = (write >> 14) & 1 != 0;
 		self.spu_enable = (write >> 15) & 1 != 0;
 	}
@@ -640,13 +642,17 @@ impl SpuControlRegister {
 // stubbed for now
 pub struct Spu {
 	control: SpuControlRegister,
+	reverb: Reverb,
+	noise: NoiseGenerator,
+
 	voices: [Voice; 24],
 	
+	noise_enabled: [bool; 24],
+	reverb_enabled: [bool; 24],
+
 	transfer_control: u16,
 	
-	reverb: Reverb,
 	even_tick: bool,
-	reverb_counter: u8,
 
 	sram: Vec<u8>, 
 	start_sram_addr: u16,
@@ -662,12 +668,16 @@ impl Spu {
 	pub fn new() -> Self {
 		Self {
 			control: SpuControlRegister::new(),
-			voices: [Voice::new(); 24],
 			reverb: Reverb::default(),
+			noise: NoiseGenerator::default(),
+
+			voices: [Voice::new(); 24],
+
+			noise_enabled: [false; 24],
+			reverb_enabled: [false; 24],
 
 			transfer_control: 0x4, // should always be 0x4
 			even_tick: true,
-			reverb_counter: 0,
 
 			sram: vec![0; 512 * 1024], // 512K of sound ram
 			start_sram_addr: 0,
@@ -692,19 +702,25 @@ impl Spu {
 		self.volume_l.tick();
 		self.volume_r.tick();
 
+		// update noise generator
+		self.noise.tick();
+
 		let mut reverb_l: i32 = 0;
 		let mut reverb_r: i32 = 0;
 
 		let mut mixed_l: i32 = 0;
 		let mut mixed_r: i32 = 0;
 
-		for (i, voice) in self.voices.iter().enumerate() {
-			let (sample_l, sample_r) = voice.current_sample;
+		for (i, voice) in self.voices.iter_mut().enumerate() {
+			let (sample_l, sample_r) = match self.noise_enabled[i] {
+				false => voice.current_sample,
+				true => voice.apply_volume(self.noise.lfsr as i16)
+			};
 
 			mixed_l += i32::from(sample_l);
 			mixed_r += i32::from(sample_r);
 
-			if self.reverb.reverb_enabled[i] {
+			if self.reverb_enabled[i] {
 				reverb_l += i32::from(sample_l);
 				reverb_r += i32::from(sample_r);
 			}
@@ -716,8 +732,6 @@ impl Spu {
 			mixed_l += i32::from(reverb_out_l);
 			mixed_r += i32::from(reverb_out_r);
 		}
-
-		self.reverb_counter = (self.reverb_counter + 1) & 1;
 
 		if !self.emu_mute {
 			let clamped_l = mixed_l.clamp(-0x8000, 0x7FFF) as i16;
@@ -744,9 +758,11 @@ impl Spu {
 			// voice flags
 			0x1F801D9C => self.read_endx(false),
 			0x1F801D9E => self.read_endx(true),
-			0x1F801D98 => self.reverb.read_reverb_enabled(false),
-			0x1F801D9A => self.reverb.read_reverb_enabled(true),
-			0x1F801D88		..= 0x1F801D9F => 0,
+			0x1F801D94 => self.read_noise_enabled( false),
+			0x1F801D96 => self.read_noise_enabled( true),
+			0x1F801D98 => self.read_reverb_enabled(false),
+			0x1F801D9A => self.read_reverb_enabled(true),
+			0x1F801D9C		..= 0x1F801D9F => 0,
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => self.start_sram_addr,
 			// Control Register (SPUCNT)
@@ -789,16 +805,18 @@ impl Spu {
 			0x1F801D8A => self.write_keyon(write, true),
 			0x1F801D8C => self.write_keyoff(write, false),
 			0x1F801D8E => self.write_keyoff(write, true),
-			0x1F801D98 => self.reverb.write_reverb_enabled(write, false),
-			0x1F801D9A => self.reverb.write_reverb_enabled(write, true),
-			0x1F801D90		..= 0x1F801D9F => {},
+			0x1F801D94 => self.write_noise_enabled(write, false),
+			0x1F801D96 => self.write_noise_enabled(write, true),
+			0x1F801D98 => self.write_reverb_enabled(write, false),
+			0x1F801D9A => self.write_reverb_enabled(write, true),
+			0x1F801D9C		..= 0x1F801D9F => {},
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => {
 				self.start_sram_addr = write;
 				self.current_sram_addr = (self.start_sram_addr as usize) << 3;
 			},
 			// Control Register (SPUCNT)
-			0x1F801DAA => self.control.write(write),
+			0x1F801DAA => self.control.write(write, &mut self.noise),
 			// Reverb work area base address
 			0x1F801DA2 => {
 				self.reverb.base_addr = (write as usize) << 3;
@@ -887,6 +905,57 @@ impl Spu {
 		}
 	}
 
+	fn read_reverb_enabled(&self, is_high: bool) -> u16 {
+		let (start, end) = match is_high {
+			false => (0, 16),
+			true => (16, 24),
+		};
+
+		let mut result = 0;
+
+		for i in start..end {
+			result |= u16::from(self.reverb_enabled[i]) << i - start;
+		}
+
+		result
+	}
+
+	fn write_reverb_enabled(&mut self, write: u16, is_high: bool) {
+		let (start, end) = match is_high {
+			false => (0, 16),
+			true => (16, 24),
+		};
+
+		for i in start..end {
+			self.reverb_enabled[i] = (write >> i - start) & 1 != 0;
+		}
+	}
+
+	fn read_noise_enabled(&self, is_high: bool) -> u16 {
+		let (start, end) = match is_high {
+			false => (0, 16),
+			true => (16, 24),
+		};
+
+		let mut result = 0;
+
+		for i in start..end {
+			result |= u16::from(self.noise_enabled[i]) << i - start;
+		}
+
+		result
+	}
+
+	fn write_noise_enabled(&mut self, write: u16, is_high: bool) {
+		let (start, end) = match is_high {
+			false => (0, 16),
+			true => (16, 24),
+		};
+
+		for i in start..end {
+			self.noise_enabled[i] = (write >> i - start) & 1 != 0;
+		}
+	}
 
 	pub fn read_stat(&self) -> u16 {
 		(self.control.read() & 0x3F)
@@ -900,11 +969,55 @@ impl Spu {
 	}
 }
 
+#[derive(Default)]
+struct NoiseGenerator {
+	lfsr: u16,
+
+	step: u8,
+	shift: u8,
+
+	counter: i32,
+}
+
+impl NoiseGenerator {
+	fn tick_lfsr(&mut self) {
+		let parity = ((self.lfsr >> 15) & 1)
+			^ ((self.lfsr >> 12) & 1)
+			^ ((self.lfsr >> 11) & 1)
+			^ ((self.lfsr >> 10) & 1)
+			^ 1;
+		
+		self.lfsr = (self.lfsr << 1) | parity;
+	}
+
+	fn tick(&mut self) {
+		self.counter -= i32::from(self.step + 4);
+
+		if self.counter >= 0 {
+			return;
+		}
+
+		self.tick_lfsr();
+
+		// reset counter
+		while self.counter < 0 {
+			self.counter += 0x20000 >> self.shift
+		}
+	}
+
+	fn write(&mut self, shift: u8, step: u8) {
+		if shift != self.shift {
+			self.counter = 0x20000 >> shift;
+		}
+
+		self.shift = shift;
+		self.step = step;
+	}
+}
+
 #[allow(non_snake_case)]
 #[derive(Default)]
 struct Reverb {
-	reverb_enabled: [bool; 24],
-
 	volume_l: i16,
 	volume_r: i16,
 	base_addr: usize,
@@ -1035,32 +1148,6 @@ impl Reverb {
 			0x1DFE => self.vRIN = write as i32,
 
 			_ => unreachable!(),
-		}
-	}
-
-	fn read_reverb_enabled(&self, is_high: bool) -> u16 {
-		let (start, end) = match is_high {
-			false => (0, 16),
-			true => (16, 24),
-		};
-
-		let mut result = 0;
-
-		for i in start..end {
-			result |= u16::from(self.reverb_enabled[i]) << i - start;
-		}
-
-		result
-	}
-
-	fn write_reverb_enabled(&mut self, write: u16, is_high: bool) {
-		let (start, end) = match is_high {
-			false => (0, 16),
-			true => (16, 24),
-		};
-
-		for i in start..end {
-			self.reverb_enabled[i] = (write >> i - start) & 1 != 0;
 		}
 	}
 
