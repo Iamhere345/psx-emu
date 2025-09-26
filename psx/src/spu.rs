@@ -371,6 +371,8 @@ struct Voice {
 
 	end_x: bool,
 
+	pitch_modulation_enabled: bool,
+
 	current_addr: usize,
 	start_addr: usize,
 	repeat_addr: usize,
@@ -378,6 +380,8 @@ struct Voice {
 	sample_rate: u16,
 	pitch_counter: u16,
 	decode_buf_index: usize,
+
+	modulation_sample: i16,
 	current_sample: (i16, i16),
 
 	// 28 samples
@@ -403,11 +407,19 @@ impl Voice {
 		}
 	}
 
-	fn tick(&mut self, sram: &[u8]) {
-		// TODO pitch modulation
+	fn tick(&mut self, sram: &[u8], prev_sample: i16) {
 		self.adsr.tick();
 
-		self.pitch_counter += self.sample_rate.min(0x4000);
+		// pitch modulation
+		let counter_step = if self.pitch_modulation_enabled {
+			let modulator = i32::from(prev_sample) + 0x8000;
+
+			apply_volume_i32(i32::from(self.sample_rate), modulator) as u16
+		} else {
+			self.sample_rate
+		};
+
+		self.pitch_counter += counter_step.min(0x4000);
 
 		// every 0x1000 steps (44100hz) increment index of sample to play
 		// i.e Counter.Bit12 and up indicates the current sample (within a ADPCM block).
@@ -442,6 +454,8 @@ impl Voice {
 
 	fn apply_volume(&mut self, sample: i16) -> (i16, i16) {
 		let adsr_sample = apply_volume(sample, self.adsr.level);
+
+		self.modulation_sample = adsr_sample;
 
 		self.volume_l.tick();
 		self.volume_r.tick();
@@ -694,8 +708,11 @@ impl Spu {
 		self.even_tick = !self.even_tick;
 
 		// update all voices
+		let mut prev_sample = 0;
 		for voice in &mut self.voices {
-			voice.tick(&self.sram);
+			voice.tick(&self.sram, prev_sample);
+
+			prev_sample = voice.modulation_sample;
 		}
 
 		// update sweep envelopes
@@ -756,6 +773,8 @@ impl Spu {
 			0x1F801D82 => self.volume_r.read(),
 			0x1F801D80	 	..= 0x1F801D87 => 0,
 			// voice flags
+			0x1F801D90 => self.read_pitch_modulation_enabled(false),
+			0x1F801D92 => self.read_pitch_modulation_enabled(true),
 			0x1F801D9C => self.read_endx(false),
 			0x1F801D9E => self.read_endx(true),
 			0x1F801D94 => self.read_noise_enabled( false),
@@ -805,6 +824,8 @@ impl Spu {
 			0x1F801D8A => self.write_keyon(write, true),
 			0x1F801D8C => self.write_keyoff(write, false),
 			0x1F801D8E => self.write_keyoff(write, true),
+			0x1F801D90 => self.write_pitch_modulation_enabled(write, false),
+			0x1F801D92 => self.write_pitch_modulation_enabled(write, true),
 			0x1F801D94 => self.write_noise_enabled(write, false),
 			0x1F801D96 => self.write_noise_enabled(write, true),
 			0x1F801D98 => self.write_reverb_enabled(write, false),
@@ -954,6 +975,32 @@ impl Spu {
 
 		for i in start..end {
 			self.noise_enabled[i] = (write >> i - start) & 1 != 0;
+		}
+	}
+
+	fn read_pitch_modulation_enabled(&self, is_high: bool) -> u16 {
+		let (start, end) = match is_high {
+			false => (1, 15),
+			true => (16, 23),
+		};
+
+		let mut result = 0;
+
+		for i in start..=end {
+			result |= u16::from(self.voices[i].pitch_modulation_enabled) << i - start;
+		}
+
+		result
+	}
+
+	fn write_pitch_modulation_enabled(&mut self, write: u16, is_high: bool) {
+		let (start, end) = match is_high {
+			false => (1, 15),
+			true => (16, 23),
+		};
+
+		for i in start..=end {
+			self.voices[i].pitch_modulation_enabled = (write >> i - start) & 1 != 0;
 		}
 	}
 
