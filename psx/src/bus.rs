@@ -241,7 +241,8 @@ impl Bus {
 			SCRATCHPAD_START	..= SCRATCHPAD_END => self.scratchpad[addr as usize -  SCRATCHPAD_START] = write,
 
 			SPU_START			..= SPU_END => self.spu.write16(addr, write.into()),
-			TIMERS_START		..= TIMERS_END => { error!("write8 to timers [0x{addr:X} 0x{write:X}"); self.timers.write32(addr, write as u32, scheduler); },
+			TIMERS_START		..= TIMERS_END => { error!("write8 to timers [0x{addr:X} 0x{write:X}"); self.timers.write32(addr, write as u32, scheduler, &self.gpu); },
+			0x1F802041 => error!("POST {write}"),
 			EXPANSION2_START	..= EXPANSION2_END => debug!("write to expansion 2 register [0x{addr:X}] 0x{write:X}. Ignoring."),
 			CDROM_START			..= CDROM_END => self.cdrom.write8(addr, write, scheduler),
 			PAD_START			..= PAD_END => self.sio0.write32(addr, write.into(), scheduler),
@@ -251,6 +252,7 @@ impl Bus {
 				0x1F802080 => print!("{}", char::from_u32(write as u32).unwrap_or('?')),
 				_ => {},
 			}
+
 
 			_ => panic!("unhandled write8 [0x{:X}] 0x{:X}", addr, write)
 		}
@@ -269,7 +271,7 @@ impl Bus {
 		match addr as usize {
 			IRQ_START		..= IRQ_END => self.interrupts.write32(addr, write as u32),
 			SPU_START		..=	SPU_END => self.spu.write16(addr, write),
-			TIMERS_START	..= TIMERS_END => self.timers.write32(addr, write as u32, scheduler),
+			TIMERS_START	..= TIMERS_END => self.timers.write32(addr, write as u32, scheduler, &self.gpu),
 			PAD_START 		..= PAD_END => self.sio0.write32(addr, write.into(), scheduler),
 			SIO1_START		..= SIO1_END => warn!("[0x{addr:X}] Unhandled SIO1 write16 0x{write:X}"),
 			
@@ -317,7 +319,7 @@ impl Bus {
 				}
 			}
 			IRQ_START			..= IRQ_END => self.interrupts.write32(addr, write),
-			TIMERS_START		..= TIMERS_END => self.timers.write32(addr, write, scheduler),
+			TIMERS_START		..= TIMERS_END => self.timers.write32(addr, write, scheduler, &self.gpu),
 			// io register RAM_SIZE
 			0x1F801060			..= 0x1F801064 => {},
 			// io register CACHE_CONTROL

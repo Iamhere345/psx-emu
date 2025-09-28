@@ -143,10 +143,10 @@ impl Scheduler {
 				self.schedule_event(SchedulerEvent::new(EventType::SpuTick), 768);
 			}
 			EventType::TimerTarget(timer) => {
-				bus.timers.target_event(timer, self, &mut bus.interrupts);
+				bus.timers.target_event(timer, self, &mut bus.interrupts, &bus.gpu);
 			},
 			EventType::TimerOverflow(timer) => {
-				bus.timers.overflow_event(timer, self, &mut bus.interrupts);
+				bus.timers.overflow_event(timer, self, &mut bus.interrupts, &bus.gpu);
 			},
 			EventType::Sio0Irq => {
 				bus.sio0.irq_event(&mut bus.interrupts);

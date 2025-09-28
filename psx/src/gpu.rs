@@ -484,11 +484,11 @@ impl Gpu {
 			| (0) << 31
 			| 0x1C000000; // TODO Drawing even/odd lines in interlace mode
 
-			//debug!("gpustat: 0x{result:X}");
+		//debug!("gpustat: 0x{result:X}");
 
-			// TODO using the non-stubbed value seems to break more things
-			0x1C000000
-			//_result
+		// TODO using the non-stubbed value seems to break more things
+		0x1C000000
+		//_result
 	}
 
 	pub fn gp0_cmd(&mut self, word: u32) {
@@ -822,6 +822,34 @@ impl Gpu {
 
 	pub fn get_display_start(&self) -> (usize, usize) {
 		(self.display_start.x as usize, self.display_start.y as usize)
+	}
+
+	pub fn get_dotclock_divider(&self) -> u64 {
+		if self.force_h368 {
+			7
+		} else {
+			match self.horizontal_res {
+				HorizontalRes::H256 => 10,
+				HorizontalRes::H320 => 8,
+				HorizontalRes::H512 => 5,
+				HorizontalRes::H640 => 4,
+			}
+		}
+	}
+
+	pub fn get_dots_per_scanline(&self) -> u64 {
+		let result_f64: f64 = if self.force_h368 {
+			487.5714
+		} else {
+			match self.horizontal_res {
+				HorizontalRes::H256 => 341.3,
+				HorizontalRes::H320 => 426.625,
+				HorizontalRes::H512 => 682.6,
+				HorizontalRes::H640 => 853.25
+			}
+		};
+
+		result_f64.floor() as u64
 	}
 
 	fn exec_cmd(&mut self, cmd: DrawCommand) -> GP0State {

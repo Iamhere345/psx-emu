@@ -336,6 +336,8 @@ impl Cdrom {
 			0x11 => self.get_loc_p(),
 			// Init
 			0xA => self.init(),
+			// Mute (stubbed)
+			0xB => (CmdResponse::int3_status(&self), AVG_CYCLES),
 			// Demute (stubbed)
 			0xC => (CmdResponse::int3_status(&self), AVG_CYCLES),
 			// Setfilter (stubbed)

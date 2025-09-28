@@ -254,6 +254,7 @@ impl R3000 {
 		match kernel_func {
 			KernelFunction::ReturnFromException | KernelFunction::Rand
 				| KernelFunction::TestEvent | KernelFunction::Unknown => return,
+			//KernelFunction::OpenEvent => error!("$ra: 0x{:X}", self.registers.read_gpr(31)),
 			_ => {}
 		}
 

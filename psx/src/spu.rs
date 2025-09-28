@@ -581,7 +581,10 @@ impl Voice {
 			// ADPCM Sample Rate
 			0x4 => self.sample_rate = write,
 			// ADPCM Start Address
-			0x6 => self.start_addr = (write as usize) << 3,
+			0x6 => {
+				self.start_addr = (write as usize) << 3;
+				trace!("voice set start addr: 0x{:X}", self.start_addr);
+			},
 			// ADSR low
 			0x8 => self.adsr.write_low(write),
 			// ADSR high
@@ -619,8 +622,8 @@ impl SoundRam {
 	}
 
 	fn read16(&self, addr: usize) -> u16 {
-		let low = self.ram[addr];
-		let high = self.ram[addr + 1];
+		let low = self[addr];
+		let high = self[addr + 1];
 
 		u16::from_le_bytes([low, high])
 	}
@@ -628,8 +631,8 @@ impl SoundRam {
 	fn write16(&mut self, addr: usize, write: u16) {
 		let bytes = u16::to_le_bytes(write);
 
-		self.ram[addr] = bytes[0];
-		self.ram[addr + 1] = bytes[1];
+		self[addr] = bytes[0];
+		self[addr + 1] = bytes[1];
 	}
 }
 
@@ -713,6 +716,8 @@ impl SpuControlRegister {
 	}
 
 	fn write(&mut self, write: u16, noise: &mut NoiseGenerator, sram: &mut SoundRam) {
+		trace!("SPUCNT write 0x{write:X}");
+
 		self.cd_audio_enable = write & 1 != 0;
 		self.ext_audio_enable = (write >> 1) & 1 != 0;
 		self.cd_audio_reverb = (write >> 2) & 1 != 0;
@@ -722,9 +727,15 @@ impl SpuControlRegister {
 
 		self.irq_enable = (write >> 6) & 1 != 0;
 
-		// writing 0 to irq enable acknowledges the irq
+		// writing 0 to irq enable acknowledges the irq and disables further irqs
 		if self.irq_enable == false {
+			trace!("ack IRQ9");
 			sram.irq.set(false);
+
+			sram.irq_enabled = false;
+		} else {
+			// writing 1 enables IRQs
+			sram.irq_enabled = true;
 		}
 
 		self.reverb_master_enable = (write >> 7) & 1 != 0;
@@ -814,7 +825,7 @@ impl Spu {
 		self.sram.write16(VOICE1_BUF_START + self.capture_buf_index, self.voices[1].mono_sample as u16);
 		self.sram.write16(VOICE3_BUF_START + self.capture_buf_index, self.voices[3].mono_sample as u16);
 
-		self.capture_buf_index =  (self.capture_buf_index + 2) & 0x3FF;
+		self.capture_buf_index = (self.capture_buf_index + 2) & 0x3FF;
 
 		// update sweep envelopes
 		self.volume_l.tick();
@@ -852,12 +863,13 @@ impl Spu {
 		}
 
 		// check for IRQ
+		let last_irq = self.sram.irq.get();
 		if !self.sram.last_irq && self.sram.irq.get() {
 			trace!("IRQ9");
 			interrupts.raise_interrupt(crate::interrupts::InterruptFlag::Spu);
 		}
 
-		self.sram.last_irq = self.sram.irq.get();
+		self.sram.last_irq = last_irq;
 
 		if !self.emu_mute {
 			let clamped_l = mixed_l.clamp(-0x8000, 0x7FFF) as i16;
@@ -892,7 +904,7 @@ impl Spu {
 			0x1F801D9A => self.read_reverb_enabled(true),
 			0x1F801D9C		..= 0x1F801D9F => 0,
 			// Sound RAM IRQ address
-			0x1F801DA4 => self.sram.irq_addr as u16,
+			0x1F801DA4 => (self.sram.irq_addr >> 3) as u16,
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => self.start_sram_addr,
 			// Control Register (SPUCNT)
@@ -943,11 +955,16 @@ impl Spu {
 			0x1F801D9A => self.write_reverb_enabled(write, true),
 			0x1F801D9C		..= 0x1F801D9F => {},
 			// Sound RAM IRQ address
-			0x1F801DA4 => self.sram.irq_addr = write as usize,
+			0x1F801DA4 => {
+				self.sram.irq_addr = (write as usize) << 3;
+				trace!("set IRQ9 addr to 0x{:X}", self.sram.irq_addr);
+			}
 			// Sound RAM Data Transfer Address
 			0x1F801DA6 => {
 				self.start_sram_addr = write;
 				self.current_sram_addr = (self.start_sram_addr as usize) << 3;
+
+				trace!("write transfer addr 0x{:X}", self.current_sram_addr);
 			},
 			// Control Register (SPUCNT)
 			0x1F801DAA => self.control.write(write, &mut self.noise, &mut self.sram),
@@ -994,7 +1011,7 @@ impl Spu {
 		let mut result = 0;
 
 		let (start, end) = match is_high {
-			true => (16, 23),
+			true => (16, 24),
 			false => (0, 16),
 		};
 
@@ -1007,7 +1024,7 @@ impl Spu {
 	
 	fn write_keyon(&mut self, write: u16, is_high: bool) {
 		let (start, end) = match is_high {
-			true => (16, 23),
+			true => (16, 24),
 			false => (0, 16),
 		};
 
@@ -1023,7 +1040,7 @@ impl Spu {
 
 	fn write_keyoff(&mut self, write: u16, is_high: bool) {
 		let (start, end) = match is_high {
-			true => (16, 23),
+			true => (16, 24),
 			false => (0, 16),
 		};
 
@@ -1115,13 +1132,13 @@ impl Spu {
 
 	pub fn read_stat(&self) -> u16 {
 		(self.control.read() & 0x3F)
-			| (0 << 6) // IRQ flag
+			| (u16::from(self.sram.irq.get()) << 6) // IRQ flag
 			// data transfer DMA read/write request
 			| ((self.control.transfer_mode as u16 & 2) << 7)
 			| (u16::from(self.control.transfer_mode == TransferMode::DmaWrite) << 8) // data transfer DMA write request
 			| (u16::from(self.control.transfer_mode == TransferMode::DmaRead) << 9) // data transfer dma read request
 			| (0 << 10) // data transfer busy flag
-			| (0 << 11) // writing to first/second half of capture buffers
+			| (u16::from(self.capture_buf_index >= 0x200) << 11) // writing to first/second half of capture buffers
 	}
 }
 

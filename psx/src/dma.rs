@@ -279,7 +279,9 @@ impl DmaInterruptRegister {
 		let old_master_int = self.master_flag;
 		self.set_master_int();
 
-		if self.master_flag && !old_master_int {
+		trace!("{} && !{}", self.master_flag, old_master_int);
+
+		if self.master_flag {
 			trace!("DMA{flag} raise int");
 			interrupts.raise_interrupt(crate::interrupts::InterruptFlag::Dma);
 		}

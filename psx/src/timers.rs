@@ -1,6 +1,6 @@
 use log::*;
 
-use crate::{interrupts::*, scheduler::*};
+use crate::{gpu::Gpu, interrupts::*, scheduler::*};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum ResetMode {
@@ -53,7 +53,7 @@ impl Timers {
 		}
 	}
 
-	pub fn write32(&mut self, addr: u32, write: u32, scheduler: &mut Scheduler) {
+	pub fn write32(&mut self, addr: u32, write: u32, scheduler: &mut Scheduler, gpu: &Gpu) {
 		let index = ((addr >> 4) & 3) as usize;
 		let reg = addr & 0xF;
 
@@ -62,14 +62,14 @@ impl Timers {
 		}
 
 		match reg {
-			0 => self.timers[index].write_counter(write as u16, scheduler),
-			4 => self.timers[index].write_mode(write, scheduler),
-			8 => self.timers[index].write_target(write as u16, scheduler),
+			0 => self.timers[index].write_counter(write as u16, scheduler, gpu),
+			4 => self.timers[index].write_mode(write, scheduler, gpu),
+			8 => self.timers[index].write_target(write as u16, scheduler, gpu),
 			_ => unimplemented!("write timer{index} register [{reg}] 0x{write:X}")
 		};
 	}
 
-	pub fn overflow_event(&mut self, timer_num: u8, scheduler: &mut Scheduler, interrupts: &mut Interrupts) {
+	pub fn overflow_event(&mut self, timer_num: u8, scheduler: &mut Scheduler, interrupts: &mut Interrupts, gpu: &Gpu) {
 
 		trace!("Timer{timer_num} overflow");
 
@@ -86,13 +86,13 @@ impl Timers {
 
 		timer.counter = 0;
 
-		let overflow_cycles = timer.convert_cycles(0xFFFF);
+		let overflow_cycles = timer.convert_cycles(0xFFFF, gpu);
 		timer.overflow_cycles_away = overflow_cycles;
 		scheduler.schedule_event(SchedulerEvent::new(EventType::TimerOverflow(timer_num)), overflow_cycles);
 
 	}
 
-	pub fn target_event(&mut self, timer_num: u8, scheduler: &mut Scheduler, interrupts: &mut Interrupts) {
+	pub fn target_event(&mut self, timer_num: u8, scheduler: &mut Scheduler, interrupts: &mut Interrupts, gpu: &Gpu) {
 		let timer = &mut self.timers[timer_num as usize];
 
 		//if timer.irq_at_target && timer.irq {
@@ -114,7 +114,7 @@ impl Timers {
 			// only reschedule the overflow event
 			scheduler.remove_event(EventType::TimerOverflow(timer_num));
 
-			let overflow_cycles = timer.convert_cycles(0xFFFF);
+			let overflow_cycles = timer.convert_cycles(0xFFFF, gpu);
 			timer.overflow_cycles_away = overflow_cycles;
 			scheduler.schedule_event(SchedulerEvent::new(EventType::TimerOverflow(timer_num)), overflow_cycles);
 		}
@@ -125,10 +125,10 @@ impl Timers {
 			timer.target
 		};
 
-		trace!("Timer{timer_num} target 0x{:X} reset mode: {:?} ovflw irq: {} tgt irq: {} (0xFFFF - 0x{:X} + 0x{:X})", timer.convert_cycles(cycles), timer.reset_after, timer.irq_at_overflow, timer.irq_at_target, timer.counter, timer.target);
+		trace!("Timer{timer_num} target 0x{:X} reset mode: {:?} ovflw irq: {} tgt irq: {} (0xFFFF - 0x{:X} + 0x{:X})", timer.convert_cycles(cycles, gpu), timer.reset_after, timer.irq_at_overflow, timer.irq_at_target, timer.counter, timer.target);
 		trace!("Timer{timer_num} ovflw irq: {} tgt irq: {} repeat: {} pulse: {}", timer.irq_at_overflow, timer.irq_at_target, timer.irq_repeat, timer.irq_pulse);
 
-		let target_cycles = timer.convert_cycles(cycles);
+		let target_cycles = timer.convert_cycles(cycles, gpu);
 		scheduler.schedule_event(SchedulerEvent::new(EventType::TimerTarget(timer_num)), target_cycles);
 
 	}
@@ -199,20 +199,20 @@ impl Timer {
 		0
 	}
 
-	pub fn write_counter(&mut self, write: u16, scheduler: &mut Scheduler) {
+	pub fn write_counter(&mut self, write: u16, scheduler: &mut Scheduler, gpu: &Gpu) {
 		self.counter = write;
 
-		self.reschedule_events(scheduler);
+		self.reschedule_events(scheduler, gpu);
 	}
 
 	pub fn read_target(&self) -> u32 {
 		self.target as u32
 	}
 
-	pub fn write_target(&mut self, write: u16, scheduler: &mut Scheduler) {
+	pub fn write_target(&mut self, write: u16, scheduler: &mut Scheduler, gpu: &Gpu) {
 		self.target = write;
 
-		self.reschedule_events(scheduler);
+		self.reschedule_events(scheduler, gpu);
 	}
 
 	pub fn read_mode(&mut self) -> u32 {
@@ -236,7 +236,7 @@ impl Timer {
 	}
 
 	// resets counter
-	pub fn write_mode(&mut self, write: u32, scheduler: &mut Scheduler) {
+	pub fn write_mode(&mut self, write: u32, scheduler: &mut Scheduler, gpu: &Gpu) {
 		self.use_sync_mode = write & 1 != 0;
 		self.sync_mode = (write >> 1) as u8 & 3;
 		self.reset_after = ResetMode::from_bits((write >> 3) & 1);
@@ -259,25 +259,25 @@ impl Timer {
 			error!("using sync mode for Timer{} (mode: {})", self.timer_num, self.sync_mode);
 		}
 
-		self.reschedule_events(scheduler);
+		self.reschedule_events(scheduler, gpu);
 	}
 
-	fn reschedule_events(&mut self, scheduler: &mut Scheduler) {
+	fn reschedule_events(&mut self, scheduler: &mut Scheduler, gpu: &Gpu) {
 		// remove old events
 		scheduler.remove_event(EventType::TimerTarget(self.timer_num));
 		scheduler.remove_event(EventType::TimerOverflow(self.timer_num));
 
 		// schedule new events
 		if self.target != 0 {
-			scheduler.schedule_event(SchedulerEvent::new(EventType::TimerTarget(self.timer_num)), self.convert_cycles(self.target));
+			scheduler.schedule_event(SchedulerEvent::new(EventType::TimerTarget(self.timer_num)), self.convert_cycles(self.target, gpu));
 		}
 
-		let overflow_cycles_away = self.convert_cycles(0xFFFF - self.counter);
+		let overflow_cycles_away = self.convert_cycles(0xFFFF - self.counter, gpu);
 		scheduler.schedule_event(SchedulerEvent::new(EventType::TimerOverflow(self.timer_num)), overflow_cycles_away);
 		self.overflow_cycles_away = overflow_cycles_away;
 	}
 
-	fn convert_cycles(&self, cycles: u16) -> u64 {	
+	fn convert_cycles(&self, cycles: u16, gpu: &Gpu) -> u64 {	
 		match self.clock_src {
 			ClockSource::System => {
 				return cycles as u64;
@@ -285,10 +285,12 @@ impl Timer {
 			ClockSource::SystemDiv => {
 				return (cycles as u64) * 8;
 			},
+			ClockSource::Dot => {
+				return (cycles as u64) * gpu.get_dotclock_divider()
+			}
 			ClockSource::Hblank => {
 				return (f64::from(cycles) * 3.2 * 853.0) as u64;
 			},
-			_ => todo!("{:?}", self.clock_src)
 		}
 	}
 
