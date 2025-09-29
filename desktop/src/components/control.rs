@@ -7,10 +7,11 @@ use eframe::egui::Ui;
 use rfd::FileDialog;
 use rcue::parser::parse_from_file;
 use rodio::buffer::SamplesBuffer;
+use rodio::OutputStream;
+use log::*;
 
 use psx::PSXEmulator;
 use psx::cdrom::disc::Disc;
-use rodio::OutputStream;
 
 use crate::app::BIOS_PATH;
 use crate::components::breakpoints::Breakpoints;
@@ -89,12 +90,16 @@ impl Control {
 		cue_dir.pop();
 
 		let mut tracks: Vec<Vec<u8>> = Vec::new();
+		let mut disc = Disc::new();
 
 		for track in cue.files {
 			let mut track_path = cue_dir.clone();
 			track_path.push(track.file);
 
+			debug!("add track {:?}", track_path);
+
 			let mut track_file = File::open(track_path).unwrap();
+
 
 			let mut data = Vec::new();
 			track_file.read_to_end(&mut data).expect("Unable to read track data");
@@ -102,8 +107,9 @@ impl Control {
 			tracks.push(data);
 		}
 
-		let disc = Disc::new(tracks);
+		disc.add_tracks(tracks);
 
+		debug!("Loaded disc: {}", cue_path);
 		psx.load_disc(disc);
 	}
 

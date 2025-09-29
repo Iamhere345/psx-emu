@@ -672,12 +672,12 @@ impl IndexMut<usize> for SoundRam {
 
 struct SpuControlRegister {
 	spu_enable: bool,					// doesnt apply to CD audio
-	mute_spu: bool,						// doesnt apply to CD audio
+	unmute_spu: bool,					// doesnt apply to CD audio
 	noise_freq_shift: u8,				// 0..0Fh = low-high frequency
 	noise_freq_step: u8,				// 0..03h = Step "4,5,6,7"
 	reverb_master_enable: bool,
 	irq_enable: bool,					// 0=Disabled/Acknowledge, 1=Enabled; only when Bit15=1
-	transfer_mode: TransferMode,	// 0=Stop, 1=ManualWrite, 2=DMAwrite, 3=DMAread
+	transfer_mode: TransferMode,		// 0=Stop, 1=ManualWrite, 2=DMAwrite, 3=DMAread
 	ext_audio_reverb: bool,
 	cd_audio_reverb: bool,
 	ext_audio_enable: bool,
@@ -688,7 +688,7 @@ impl SpuControlRegister {
 	fn new() -> Self {
 		Self {
 			spu_enable: false,
-			mute_spu: true,
+			unmute_spu: true,
 			noise_freq_shift: 0,
 			noise_freq_step: 0,
 			reverb_master_enable: false,
@@ -711,7 +711,7 @@ impl SpuControlRegister {
 			| (u16::from(self.reverb_master_enable) << 7)
 			| (u16::from(self.noise_freq_step) << 8)
 			| (u16::from(self.noise_freq_shift) << 10)
-			| (u16::from(self.mute_spu) << 14)
+			| (u16::from(self.unmute_spu) << 14)
 			| (u16::from(self.spu_enable) << 15)
 	}
 
@@ -745,7 +745,7 @@ impl SpuControlRegister {
 
 		noise.write(self.noise_freq_shift, self.noise_freq_step);
 
-		self.mute_spu = (write >> 14) & 1 != 0;
+		self.unmute_spu = (write >> 14) & 1 != 0;
 		self.spu_enable = (write >> 15) & 1 != 0;
 	}
 
@@ -774,6 +774,7 @@ pub struct Spu {
 
 	volume_l: SweepEnvelope,
 	volume_r: SweepEnvelope,
+	cd_volume: (i16, i16),
 
 	pub emu_mute: bool,
 }
@@ -801,12 +802,13 @@ impl Spu {
 
 			volume_l: SweepEnvelope::default(),
 			volume_r: SweepEnvelope::default(),
+			cd_volume: (0, 0),
 
 			emu_mute: false,
 		}
 	}
 
-	pub fn tick(&mut self, interrupts: &mut Interrupts) -> (i16, i16) {
+	pub fn tick(&mut self, interrupts: &mut Interrupts, cd_sample: (i16, i16)) -> (i16, i16) {
 		self.even_tick = !self.even_tick;
 
 		// update all voices
@@ -855,6 +857,27 @@ impl Spu {
 			}
 		}
 
+		// muting the SPU only affects the voices
+		if !self.control.unmute_spu {
+			mixed_l = 0;
+			mixed_r = 0;
+		}
+
+		// mix CD audio
+		if self.control.cd_audio_enable {
+			let cd_l = apply_volume(cd_sample.0, self.cd_volume.0);
+			let cd_r = apply_volume(cd_sample.1, self.cd_volume.1);
+
+			mixed_l += i32::from(cd_l);
+			mixed_r += i32::from(cd_r);
+
+			if self.control.cd_audio_reverb {
+				reverb_l += i32::from(cd_l);
+				reverb_r += i32::from(cd_r);
+			}
+		}
+
+		// mix reverb output
 		if self.even_tick {
 			let (reverb_out_l, reverb_out_r) = self.reverb.tick(reverb_l, reverb_r, &mut self.sram);
 
@@ -892,7 +915,11 @@ impl Spu {
 			// volume regs
 			0x1F801D80 => self.volume_l.read(),
 			0x1F801D82 => self.volume_r.read(),
+			0x1F801D84 => self.reverb.volume_l as u16, 
+			0x1F801D86 => self.reverb.volume_r as u16,
 			0x1F801D80	 	..= 0x1F801D87 => 0,
+			0x1F801DB0 => self.cd_volume.0 as u16,
+			0x1F801DB2 => self.cd_volume.1 as u16, 
 			// voice flags
 			0x1F801D90 => self.read_pitch_modulation_enabled(false),
 			0x1F801D92 => self.read_pitch_modulation_enabled(true),
@@ -941,6 +968,8 @@ impl Spu {
 			0x1F801D82 => self.volume_r.write(write),
 			0x1F801D84 => self.reverb.volume_l = write as i16, 
 			0x1F801D86 => self.reverb.volume_r = write as i16,
+			0x1F801DB0 => self.cd_volume.0 = write as i16,
+			0x1F801DB2 => self.cd_volume.1 = write as i16,
 			0x1F801DB0		..= 0x1F801DB4 => {},
 			// voice flags
 			0x1F801D88 => self.write_keyon(write, false),
@@ -967,7 +996,16 @@ impl Spu {
 				trace!("write transfer addr 0x{:X}", self.current_sram_addr);
 			},
 			// Control Register (SPUCNT)
-			0x1F801DAA => self.control.write(write, &mut self.noise, &mut self.sram),
+			0x1F801DAA => {
+				self.control.write(write, &mut self.noise, &mut self.sram);
+
+				if !self.control.spu_enable {
+					for mut voice in self.voices {
+						voice.key_off();
+						voice.adsr.level = 0;
+					}
+				}
+			},
 			// Reverb work area base address
 			0x1F801DA2 => {
 				self.reverb.base_addr = (write as usize) << 3;

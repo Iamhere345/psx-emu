@@ -30,8 +30,8 @@ impl DisplayViwer {
 		let vram = psx.get_vram();
 		let mut display_buf = vec![Color32::default(); width * height];
 
-		for y in start_y..(start_y + height) & 0x1FF {
-			for x in start_x..(start_x + width) & 0x3FF {
+		for y in start_y..(start_y + height) {
+			for x in start_x..(start_x + width) {
 				let vram_addr = 1024 * y + x;
 				let pixel = vram[vram_addr];
 

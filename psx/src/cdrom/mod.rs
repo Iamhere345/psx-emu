@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use disc::{CdIndex, Disc};
 use log::*;
 
-use crate::{cdrom::disc::Sector, interrupts::{InterruptFlag, Interrupts}, scheduler::{EventType, Scheduler, SchedulerEvent}};
+use crate::{cdrom::disc::Sector, interrupts::{InterruptFlag, Interrupts}, scheduler::{EventType, Scheduler, SchedulerEvent}, spu::Spu};
 use self::commands::*;
 
 mod commands;
@@ -134,6 +134,36 @@ impl DataFifo {
 	}
 }
 
+pub struct AudioBuf {
+	buffer: [u8; 0x930],
+	index: usize,
+}
+
+impl AudioBuf {
+	pub fn new() -> Self {
+		Self {
+			buffer: [0; 0x930],
+			index: 0,
+		}
+	}
+
+	pub fn read_sector(&mut self, data: &[u8]) {
+		self.buffer[..data.len()].copy_from_slice(data);
+		self.index = 0;
+	}
+
+	pub fn get_sample(&mut self) -> i16 {
+		if self.index >= self.buffer.len() {
+			0
+		} else {
+			let sample = i16::from_le_bytes([self.buffer[self.index], self.buffer[self.index + 1]]);
+			self.index += 2;
+
+			sample
+		}
+	}
+}
+
 #[derive(Clone, PartialEq)]
 pub struct CmdResponse {
 	int_level: u8,
@@ -168,7 +198,8 @@ impl CmdResponse {
 pub struct Cdrom {
 	params_fifo: VecDeque<u8>,
 	result_fifo: VecDeque<u8>,
-	data_fifio: DataFifo,
+	data_fifo: DataFifo,
+	audio_buf: AudioBuf,
 	bank: u8,
 
 	int_regs: CdromInterrupts,
@@ -188,6 +219,10 @@ pub struct Cdrom {
 	last_sector_size: SectorSize,
 	ignore_cur_sector_size: bool,
 	motor_on: bool,
+
+	audio_muted: bool,
+	pending_atv: [[u8; 2]; 2],
+	atv: [[u8; 2]; 2],
 }
 
 impl Cdrom {
@@ -195,7 +230,8 @@ impl Cdrom {
 		Self {
 			params_fifo: VecDeque::new(),
 			result_fifo: VecDeque::new(),
-			data_fifio: DataFifo::new(),
+			data_fifo: DataFifo::new(),
+			audio_buf: AudioBuf::new(),
 			bank: 0,
 
 			int_regs: CdromInterrupts::new(),
@@ -215,6 +251,10 @@ impl Cdrom {
 			last_sector_size: SectorSize::DataOnly,
 			ignore_cur_sector_size: false,
 			motor_on: true,
+
+			audio_muted: false,
+			pending_atv: [[0x80; 2]; 2],
+			atv: [[0x80; 2]; 2],
 		}
 	}
 
@@ -242,7 +282,7 @@ impl Cdrom {
 			// RDDATA
 			2 => {
 				//trace!("read data fifo: 0x{data:X}");
-				self.data_fifio.pop()
+				self.data_fifo.pop()
 			},
 			// either int mask or flags
 			3 => match self.bank {
@@ -268,7 +308,7 @@ impl Cdrom {
 					trace!("write 0x{write:X} to fifo"); 
 					self.params_fifo.push_back(write); 
 				},
-				3 => trace!("request register write: BFRD: {} DRQSTS: {}", (write >> 7) & 1, !self.data_fifio.is_empty()),
+				3 => trace!("request register write: BFRD: {} DRQSTS: {}", (write >> 7) & 1, !self.data_fifo.is_empty()),
 				_ => todo!("CDROM write [0x{addr:X}][{}] 0x{write:X}", self.bank),
 			},
 			1 => match reg {
@@ -279,15 +319,20 @@ impl Cdrom {
 			},
 			2 => match reg {
 				0 => self.write_status(write),
-				2 => warn!("Unhandled write to ATV0"),
-				3 => warn!("Unhandled write to ATV1"),
+				2 => self.pending_atv[0][0] = write,
+				3 => self.pending_atv[0][1] = write,
 				_ => todo!("CDROM write [0x{addr:X}][{}] 0x{write:X}", self.bank),
 			},
 			3 => match reg {
 				0 => self.write_status(write),
-				1 => warn!("Unhandled write to ATV2"),
-				2 => warn!("Unhandled write to ATV3"),
-				3 => warn!("Unhandled write to ADPCTL"),
+				1 => self.pending_atv[1][0] = write,
+				2 => self.pending_atv[1][1] = write,
+				// ADPCTL
+				3 => {
+					if (write >> 5) & 1 != 0 {
+						self.atv = self.pending_atv;
+					}
+				},
 				_ => todo!("CDROM write [0x{addr:X}][{}] 0x{write:X}", self.bank),
 			},
 			
@@ -300,12 +345,12 @@ impl Cdrom {
 			| (u8::from(self.params_fifo.is_empty()) << 3)
 			| (u8::from(!(self.params_fifo.len() >= 16)) << 4)
 			| (u8::from(!self.result_fifo.is_empty()) << 5)
-			| (u8::from(!self.data_fifio.is_empty()) << 6)
+			| (u8::from(!self.data_fifo.is_empty()) << 6)
 			| (u8::from(self.int_regs.int_flags != 0) << 7);
 		
 		trace!("read status: 0b{result:b}");
 
-		if !self.data_fifio.is_empty() {
+		if !self.data_fifo.is_empty() {
 			//debug!("read DRQSTS true");
 		}
 
@@ -337,9 +382,9 @@ impl Cdrom {
 			// Init
 			0xA => self.init(),
 			// Mute (stubbed)
-			0xB => (CmdResponse::int3_status(&self), AVG_CYCLES),
+			0xB => self.mute(),
 			// Demute (stubbed)
-			0xC => (CmdResponse::int3_status(&self), AVG_CYCLES),
+			0xC => self.demute(),
 			// Setfilter (stubbed)
 			0xD => (CmdResponse::int3_status(&self), AVG_CYCLES),
 			// Setmode
@@ -368,7 +413,7 @@ impl Cdrom {
 	}
 
 	// different from STATUS/ADDRESS register
-	pub fn get_stat(&self) -> u8 {
+	fn get_stat(&self) -> u8 {
 		let result = (u8::from(self.motor_on) << 1) // motor state
 			| (u8::from(self.disc.is_none()) << 4)		// shell open
 			| (self.drive_state as u8);			// reading data sectors
@@ -386,7 +431,10 @@ impl Cdrom {
 			return;
 		}
 
-		self.int_regs.raise_interrupt(response.int_level, irq);
+		// 0 corresponds to no interrupt (for Play without report IRQs)
+		if response.int_level != 0 {
+			self.int_regs.raise_interrupt(response.int_level, irq);
+		}
 
 		for result in response.result {
 			self.result_fifo.push_back(result);
@@ -403,5 +451,24 @@ impl Cdrom {
 			}
 		}
 		
+	}
+
+	pub fn get_audio_sample(&mut self) -> (i16, i16) {
+		if !self.audio_muted {
+			// big endian as we are removing fifo entries from the front
+			let sample_l = self.audio_buf.get_sample();
+			let sample_r = self.audio_buf.get_sample();
+			
+			self.apply_volume(sample_l, sample_r)
+		} else {
+			(0, 0)
+		}
+	}
+
+	fn apply_volume(&self, raw_l: i16, raw_r: i16) -> (i16, i16) {
+		let sample_l = ((i32::from(raw_l) * i32::from(self.atv[0][0])) >> 7) + ((i32::from(raw_r) * i32::from(self.atv[1][1])) >> 7);
+		let sample_r = ((i32::from(raw_l) * i32::from(self.atv[0][1])) >> 7) + ((i32::from(raw_r) * i32::from(self.atv[1][0])) >> 7);
+
+		(sample_l.clamp(-0x8000, 0x7FFF) as i16, sample_r.clamp(-0x8000, 0x7FFF) as i16)
 	}
 }

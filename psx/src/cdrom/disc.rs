@@ -71,14 +71,50 @@ impl Display for CdIndex {
 	}
 }
 
+pub struct Track {
+	number: usize,
+	data: Vec<u8>,
+	sectors: usize,
+	start_lba: usize,
+	end_lba: usize,
+}
+
+impl Track {
+	pub const EMPTY: Track = Track { number: 0, data: Vec::new(), sectors: 0, start_lba: 0, end_lba: 0 };
+}
+
 pub struct Disc {
-	pub tracks: Vec<Vec<u8>>
+	pub tracks: Vec<Track>
 }
 
 impl Disc {
-	pub fn new(tracks: Vec<Vec<u8>>) -> Self {
+	pub fn new() -> Self {
 		Self {
-			tracks
+			tracks: Vec::new(),
+		}
+	}
+
+	pub fn add_tracks(&mut self, tracks: Vec<Vec<u8>>) {
+		let mut total_sectors = 0;
+		let mut track_num = 0;
+
+		for track_data in tracks {
+			let sectors = track_data.len() / BYTES_PER_SECTOR;
+
+			let start_lba = total_sectors + 150 + (usize::from(track_num > 0) * 150);
+			let end_lba = total_sectors + sectors;
+			
+			total_sectors += sectors;
+			track_num += 1;
+
+			self.tracks.push(Track {
+				number: track_num,
+				data: track_data,
+				sectors: sectors,
+				start_lba: start_lba,
+				end_lba: end_lba,
+			});
+
 		}
 	}
 
@@ -91,21 +127,47 @@ impl Disc {
 		let (track_num, start_addr) = self.get_track_number(sector_addr);
 		let track_addr = sector_addr - start_addr;
 
-		Sector::new(self.tracks[track_num][track_addr..track_addr + BYTES_PER_SECTOR].to_vec())
+		Sector::new(self.tracks[track_num].data[track_addr..track_addr + BYTES_PER_SECTOR].to_vec())
 
 	}
 
 	pub fn get_track_number(&self, sector_addr: usize) -> (usize, usize) {
 		let mut track_addr = 0;
 		for (track_num, track) in self.tracks.iter().enumerate() {
-			if sector_addr >= track_addr && sector_addr < track_addr + track.len() {
+			if sector_addr >= track_addr && sector_addr < track_addr + track.data.len() {
 				return (track_num, track_addr)
 			}
 			
-			track_addr += track.len();
+			track_addr += track.data.len();
 		}
 
 		panic!("couldn't find track");
+	}
+
+	pub fn get_track_start(&self, track_num: usize) -> CdIndex {
+		CdIndex::from_lba(self.tracks[track_num - 1].start_lba)
+	}
+
+	pub fn get_track_offset(&self, abs_index: CdIndex) -> (CdIndex, usize) {
+		let track = &self.tracks[self.get_track_from_index(abs_index)];
+
+		(CdIndex::from_lba(abs_index.to_lba() - track.start_lba), track.number)
+	}
+
+	fn get_track_from_index(&self, index: CdIndex) -> usize {
+		let index_lba = index.to_lba();
+
+		for (i,  track) in self.tracks.iter().enumerate() {
+			if index_lba >= track.start_lba && index_lba <= track.end_lba {
+				return i
+			}
+		}
+
+		0
+	}
+
+	pub fn get_disc_end(&self) -> CdIndex {
+		CdIndex::from_lba(self.tracks.last().unwrap().end_lba + 150)
 	}
 }
 
@@ -129,11 +191,11 @@ impl Sector {
 	}
 }
 
-fn bcd_to_binary(value: u8) -> u8 {
+pub fn bcd_to_binary(value: u8) -> u8 {
     10 * (value >> 4) + (value & 0xF)
 }
 
-fn binary_to_bcd(value: u8) -> u8 {
+pub fn binary_to_bcd(value: u8) -> u8 {
     ((value / 10) << 4) | (value % 10)
 }
 

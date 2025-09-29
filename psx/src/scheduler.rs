@@ -127,7 +127,8 @@ impl Scheduler {
 				self.schedule_event(SchedulerEvent::new(EventType::Vblank), 571212);
 			},
 			EventType::SpuTick => {
-				let (sample_l, sample_r) = bus.spu.tick(&mut bus.interrupts);
+				let cd_sample = bus.cdrom.get_audio_sample();
+				let (sample_l, sample_r) = bus.spu.tick(&mut bus.interrupts, cd_sample);
 
 				// convert to f32 PCM sample in [-1, 1] range
 				self.audio_buffer.push(f32::from(sample_l) / f32::from(i16::MAX));
