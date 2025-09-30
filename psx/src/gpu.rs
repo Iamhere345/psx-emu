@@ -860,6 +860,7 @@ impl Gpu {
 				GP0State::RecvData(info)
 			},
 			DrawCommand::VramCpuDma => {
+				trace!("Start VRAM->CPU DMA");
 				let info = self.init_dma();
 
 				GP0State::SendData(info)
@@ -922,7 +923,9 @@ impl Gpu {
 			height = 512;
 		}
 
-		let extra_halfword = (width * height) % 2 != 0;
+		//let extra_halfword = (width * height) % 2 != 0;
+
+		trace!("init dma dest: ({dest_x}, {dest_y}) size: ({width}, {height}) halfwords: {}", width * height);
 
 		VramDmaInfo {
 			dest_x,
@@ -931,7 +934,7 @@ impl Gpu {
 			height,
 			current_row: 0,
 			current_col: 0,
-			halfwords_left: (width * height) + u16::from(extra_halfword),
+			halfwords_left: (width * height)// + u16::from(extra_halfword),
 		}
 	}
 
@@ -945,10 +948,14 @@ impl Gpu {
 			// wrap from 1023 to 0
 			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
-			self.draw_pixel_15bit(halfword, vram_col, vram_row, false);
+			self.draw_pixel_15bit(halfword, vram_col, vram_row, false, false);
 
 			info.current_col += 1;
 			info.halfwords_left -= 1;
+
+			if info.halfwords_left == 0 {
+				return GP0State::WaitingForNextCmd;
+			}
 
 			if info.current_col == info.width {
 				info.current_col = 0;
@@ -956,18 +963,14 @@ impl Gpu {
 			}
 		}
 
-		if info.halfwords_left == 0 {
-			return GP0State::WaitingForNextCmd;
-		}
-
 		GP0State::RecvData(info)
 	}
 
 	fn process_vram_cpu_dma(&mut self, mut info: VramDmaInfo) -> u32 {
-
-		let mut result: [u16; 2] = [0; 2];
+		let mut result: u32 = 0;
 
 		for i in 0..2 {
+			trace!("[VRAM->CPU] col: {} row: {} halfwords left: {}", info.current_col, info.current_row, info.halfwords_left);
 
 			// wrap from 511 to 0
 			let vram_row = ((info.dest_y + info.current_row) & 0x1FF) as u32;
@@ -975,10 +978,15 @@ impl Gpu {
 			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
 			let vram_addr = coord_to_vram_index(vram_col, vram_row) as usize;
-			result[i] = self.vram[vram_addr];
+			result |= u32::from(self.vram[vram_addr] << 16 * i);
 
 			info.current_col += 1;
 			info.halfwords_left -= 1;
+
+			if info.halfwords_left == 0 {
+				self.gp0_state = GP0State::WaitingForNextCmd;
+				return result;
+			}
 
 			if info.current_col == info.width {
 				info.current_col = 0;
@@ -988,12 +996,13 @@ impl Gpu {
 		}
 
 		if info.halfwords_left == 0 {
+			trace!("[VRAM-CPU] end transfer");
 			self.gp0_state = GP0State::WaitingForNextCmd;
 		} else {
 			self.gp0_state = GP0State::SendData(info);
 		}
 
-		(u32::from(result[1]) << 16) | u32::from(result[0])
+		result
 	}
 
 	fn vram_copy(&mut self) {
@@ -1021,7 +1030,7 @@ impl Gpu {
 
 				let src = self.vram[src_addr];
 				//trace!("[VRAM-VRAM DMA] draw pixel 0x{src:X} at ({}, {})", (dest_x + x_offset) as u32, (dest_y + y_offset) as u32);
-				self.draw_pixel_15bit(src, ((dest_x + x_offset) & 0x3FF) as u32, ((dest_y + y_offset) & 0x1FF) as u32, false);
+				self.draw_pixel_15bit(src, ((dest_x + x_offset) & 0x3FF) as u32, ((dest_y + y_offset) & 0x1FF) as u32, false, false);
 			}
 		}
 	}
@@ -1107,7 +1116,7 @@ impl Gpu {
 					colour = apply_dithering(colour, vertex)
 				}
 
-				self.draw_pixel_15bit(colour.truncate_to_15bit(), vertex.x as u32, vertex.y as u32, semi_transparent);
+				self.draw_pixel_15bit(colour.truncate_to_15bit(), vertex.x as u32, vertex.y as u32, semi_transparent, false);
 
 			}
 
@@ -1159,7 +1168,7 @@ impl Gpu {
                 	continue;
             	}
 
-				let (draw_colour, semi_transparent) = if cmd.textured {
+				let (draw_colour, mask_bit) = if cmd.textured {
 					let tex_colour_u16 = self.sample_texture(Vertex::new(cmd.position.tex_x + (x - min_x), cmd.position.tex_y + (y - min_y)), cmd.clut);
 					let tex_colour =  Colour::rgb555_to_rgb888(tex_colour_u16);
 
@@ -1167,18 +1176,20 @@ impl Gpu {
 						continue;
 					}
 
-					let semi_transparent = cmd.semi_transparent && tex_colour_u16 & 0x8000 != 0;
+					let mask_bit = tex_colour_u16 & 0x8000 != 0;
 
 					if !cmd.raw_texture {
-						(apply_modulation(tex_colour, cmd.colour), semi_transparent)
+						(apply_modulation(tex_colour, cmd.colour), mask_bit)
 					} else {
-						(tex_colour, semi_transparent)
+						(tex_colour, mask_bit)
 					}
 				} else {
-					(cmd.colour, cmd.semi_transparent)
+					(cmd.colour, false)
 				};
 
-				self.draw_pixel_15bit(u16::from(draw_colour.truncate_to_15bit()), x as u32, y as u32, semi_transparent);
+				let semi_transparent = cmd.semi_transparent && (!cmd.textured || mask_bit);
+
+				self.draw_pixel_15bit(u16::from(draw_colour.truncate_to_15bit()), x as u32, y as u32, semi_transparent, mask_bit);
 			}
 		}
 	}
@@ -1288,18 +1299,14 @@ impl Gpu {
 				if is_inside_triangle(p, v0, v1, v2) {
 					let shaded_colour = if cmd.shaded {
 						let coords = compute_barycentric_coords(p, v0, v1, v2);
-						let mut colour = interpolate_colour(coords, [v0.colour, v1.colour, v2.colour]);
-
-						if self.tex_page.dithering {
-							colour = apply_dithering(colour, p);
-						}
+						let colour = interpolate_colour(coords, [v0.colour, v1.colour, v2.colour]);
 
 						colour
 					} else {
 						cmd.colour
 					};
 
-					let (textured_colour, semi_transparent) = if cmd.textured {
+					let (textured_colour, mask_bit) = if cmd.textured {
 						
 						let coords = compute_barycentric_coords(p, v0, v1, v2);
 						let interpolated_coords = interpolate_uv(coords, [v0, v1, v2]);
@@ -1312,20 +1319,27 @@ impl Gpu {
 							continue;
 						}
 
-						// bit 15 of the texture colour specifies if this pixel should be semi-transparent
-						let semi_transparent = cmd.semi_transparent && tex_colour_u16 & 0x8000 != 0;
+						let final_tex_colour = match cmd.raw_texture {
+							true => tex_colour,
+							false => apply_modulation(tex_colour, shaded_colour),
+						};
 
-						if !cmd.raw_texture {
-							(apply_modulation(tex_colour, shaded_colour), semi_transparent)
-						} else {
-							(tex_colour, semi_transparent)
-						}
+						(final_tex_colour, tex_colour_u16 & 0x8000 != 0)
 
 					} else {
-						(shaded_colour, cmd.semi_transparent)
+						(shaded_colour, false)
 					};
 
-					self.draw_pixel_15bit(textured_colour.truncate_to_15bit(), x as u32, y as u32, semi_transparent);
+					// dithering is applied on gourad shaded polygons and modulated texture polygons
+					let dithered_colour = if self.tex_page.dithering && (cmd.shaded || (cmd.textured && !cmd.raw_texture)) {
+						apply_dithering(textured_colour, p)
+					} else {
+						textured_colour
+					};
+
+					let semi_transparent = cmd.semi_transparent && (!cmd.textured || mask_bit);
+
+					self.draw_pixel_15bit(dithered_colour.truncate_to_15bit(), x as u32, y as u32, semi_transparent, mask_bit);
 				}
 			}
 		}
@@ -1368,8 +1382,8 @@ impl Gpu {
 
 	}
 
-	fn draw_pixel_15bit(&mut self, colour: u16, x: u32, y: u32, semi_transparent: bool) {
-		let mask = u16::from(self.force_mask_bit) << 15;
+	fn draw_pixel_15bit(&mut self, colour: u16, x: u32, y: u32, semi_transparent: bool, mask_bit: bool) {
+		let mask = u16::from(mask_bit || self.force_mask_bit) << 15;
 
 		let old_pixel = self.vram[coord_to_vram_index(x, y) as usize];
 
