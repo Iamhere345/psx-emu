@@ -161,11 +161,12 @@ impl Bus {
 				self.read8(unmasked_addr, scheduler),
 				self.read8(unmasked_addr + 1, scheduler)
 			]),
-			IRQ_START	..= IRQ_END => self.interrupts.read32(addr) as u16,
-			SPU_START	..= SPU_END => self.spu.read16(addr),
-			PAD_START	..= PAD_END => self.sio0.read32(addr) as u16,
+			IRQ_START			..= IRQ_END => self.interrupts.read32(addr) as u16,
+			SPU_START			..= SPU_END => self.spu.read16(addr),
+			PAD_START			..= PAD_END => self.sio0.read32(addr) as u16,
 			SIO1_START			..= SIO1_END => { warn!("[0x{addr:X}] Unhandled SIO1 read16"); 0 }
-			TIMERS_START..= TIMERS_END => self.timers.read32(addr, scheduler) as u16,
+			TIMERS_START		..= TIMERS_END => self.timers.read32(addr, scheduler) as u16,
+			MEMCONTROL_START	..= MEMCONTROL_END => { warn!("[{addr:X}] Unhandled read16 from memcontrol"); 0 },
 
 			_ => panic!("unhandled read16 0x{addr:X}/0x{unmasked_addr:X}"),
 		}
@@ -274,6 +275,7 @@ impl Bus {
 			TIMERS_START	..= TIMERS_END => self.timers.write32(addr, write as u32, scheduler, &self.gpu),
 			PAD_START 		..= PAD_END => self.sio0.write32(addr, write.into(), scheduler),
 			SIO1_START		..= SIO1_END => warn!("[0x{addr:X}] Unhandled SIO1 write16 0x{write:X}"),
+			MEMCONTROL_START..= MEMCONTROL_END => warn!("[{addr:X}] Unhandled write16 from memcontrol"),
 			
 			RAM_START		..= RAM_END => {
 				self.write8(unmasked_addr, lsb, scheduler);

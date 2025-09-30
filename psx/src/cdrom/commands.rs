@@ -436,4 +436,20 @@ impl Cdrom {
 		(CmdResponse::int3_status(&self), AVG_CYCLES)
 	}
 
+	// just a copy of init
+	pub fn motor_on(&mut self) -> (CmdResponse, u64) {
+		self.motor_on = true;
+
+		let mut first_response = CmdResponse::int3_status(&self);
+		let second_response = CmdResponse {
+			int_level: 2,
+			result: vec![self.get_stat()],
+			second_response: None,
+			on_complete: None,
+		};
+
+		first_response.second_response = Some((Box::new(second_response), DELAY_1MS));
+		(first_response, 0x13CCE)
+	}
+
 }

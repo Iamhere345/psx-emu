@@ -128,6 +128,8 @@ impl Control {
 		let bios = fs::read(BIOS_PATH).unwrap();
 		*psx = PSXEmulator::new(bios, audio_callback);
 
+		psx.bus.spu.emu_mute = self.muted;
+
 		tty.out_buf.clear();
 		breakpoints.breakpoints.clear();
 	}

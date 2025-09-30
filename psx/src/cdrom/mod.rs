@@ -373,6 +373,8 @@ impl Cdrom {
 			0x3 => self.play(),
 			// ReadN
 			0x6 => self.read_n(),
+			// MotorOn (Standby)
+			0x7 => self.motor_on(),
 			// Stop
 			0x8 => self.stop(),
 			// Pause
