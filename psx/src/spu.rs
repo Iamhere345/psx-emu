@@ -868,8 +868,8 @@ impl Spu {
 			let cd_l = apply_volume(cd_sample.0, self.cd_volume.0);
 			let cd_r = apply_volume(cd_sample.1, self.cd_volume.1);
 
-			mixed_l += i32::from(cd_l);
-			mixed_r += i32::from(cd_r);
+			mixed_l = (mixed_l + i32::from(cd_l)).clamp(-0x8000, 0x7FFF);
+			mixed_r = (mixed_r + i32::from(cd_r)).clamp(-0x8000, 0x7FFF);
 
 			if self.control.cd_audio_reverb {
 				reverb_l += i32::from(cd_l);
@@ -881,8 +881,8 @@ impl Spu {
 		if self.even_tick {
 			let (reverb_out_l, reverb_out_r) = self.reverb.tick(reverb_l, reverb_r, &mut self.sram);
 
-			mixed_l += i32::from(reverb_out_l);
-			mixed_r += i32::from(reverb_out_r);
+			mixed_l = (mixed_l + i32::from(reverb_out_l)).clamp(-0x8000, 0x7FFF);
+			mixed_r = (mixed_r + i32::from(reverb_out_r)).clamp(-0x8000, 0x7FFF);
 		}
 
 		// check for IRQ
@@ -1005,6 +1005,8 @@ impl Spu {
 						voice.adsr.level = 0;
 					}
 				}
+
+				self.reverb.enabled = self.control.reverb_master_enable;
 			},
 			// Reverb work area base address
 			0x1F801DA2 => {
@@ -1229,6 +1231,7 @@ impl NoiseGenerator {
 #[allow(non_snake_case)]
 #[derive(Default)]
 struct Reverb {
+	enabled: bool,
 	volume_l: i16,
 	volume_r: i16,
 	base_addr: usize,
@@ -1363,8 +1366,8 @@ impl Reverb {
 	}
 
 	fn tick(&mut self, sample_l: i32, sample_r: i32, sram: &mut SoundRam) -> (i16, i16) {
-		let input_l = apply_volume_i32(sample_l, self.vLIN);
-		let input_r = apply_volume_i32(sample_r, self.vRIN);
+		let input_l = apply_volume_i32(sample_l, self.vLIN / 2);
+		let input_r = apply_volume_i32(sample_r, self.vRIN / 2);
 
 		// same side reflection filter
 		self.reflection_filter(input_l, self.mLSAME, self.dLSAME, sram);
@@ -1430,6 +1433,10 @@ impl Reverb {
 	}
 	
 	fn write_reverb(&mut self, addr: usize, write: u16, sram: &mut SoundRam) {
+		// disabling reverb only stops writes
+		if !self.enabled {
+			return;
+		}
 		let offset =  (self.current_addr - self.base_addr).wrapping_add(addr) % (SRAM_LEN - self.base_addr);
 		let write_addr = self.base_addr.wrapping_add(offset);
 		

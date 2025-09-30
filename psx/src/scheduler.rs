@@ -2,7 +2,7 @@ use std::{collections::BinaryHeap, i16};
 
 use crate::{bus::Bus, interrupts::InterruptFlag, cdrom::CmdResponse};
 
-const AUDIO_BUFFER_LEN: usize = 735 * 2; // 44100hz / 60hz * two channels (stereo)
+const AUDIO_BUFFER_LEN: usize = 735 * 2 * 2; // 44100hz / 60hz * two channels (stereo)
 
 #[derive(Clone, PartialEq)]
 pub enum EventType {

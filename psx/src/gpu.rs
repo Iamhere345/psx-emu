@@ -967,7 +967,7 @@ impl Gpu {
 	}
 
 	fn process_vram_cpu_dma(&mut self, mut info: VramDmaInfo) -> u32 {
-		let mut result: u32 = 0;
+		let mut result: [u16; 2] = [0; 2];
 
 		for i in 0..2 {
 			trace!("[VRAM->CPU] col: {} row: {} halfwords left: {}", info.current_col, info.current_row, info.halfwords_left);
@@ -978,15 +978,15 @@ impl Gpu {
 			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
 			let vram_addr = coord_to_vram_index(vram_col, vram_row) as usize;
-			result |= u32::from(self.vram[vram_addr] << 16 * i);
+			result[i] = self.vram[vram_addr];
 
 			info.current_col += 1;
 			info.halfwords_left -= 1;
 
-			if info.halfwords_left == 0 {
+			/* if info.halfwords_left == 0 {
 				self.gp0_state = GP0State::WaitingForNextCmd;
 				return result;
-			}
+			} */
 
 			if info.current_col == info.width {
 				info.current_col = 0;
@@ -1002,7 +1002,7 @@ impl Gpu {
 			self.gp0_state = GP0State::SendData(info);
 		}
 
-		result
+		(u32::from(result[1]) << 16) | u32::from(result[0])
 	}
 
 	fn vram_copy(&mut self) {
