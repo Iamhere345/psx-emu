@@ -31,7 +31,7 @@ enum TxState {
 }
 
 #[derive(Default)]
-pub struct ControllerState {
+pub struct InputState {
     pub btn_up: bool,
     pub btn_down: bool,
     pub btn_left: bool,
@@ -51,6 +51,11 @@ pub struct ControllerState {
     pub btn_start: bool,
 }
 
+#[derive(Default)]
+pub struct ControllerState {
+    input_state: InputState
+}
+
 impl ControllerState {
     fn new() -> Self {
         Self::default()
@@ -59,29 +64,33 @@ impl ControllerState {
     fn digital_switches_low(&self) -> u8 {
         // invert inputs (0=Pressed, 1=Released)
         !(
-            u8::from(self.btn_select) << 0
+            u8::from(self.input_state.btn_select) << 0
                 | u8::from(true) << 1  // analog only
                 | u8::from(true) << 2  // analog only
-                | u8::from(self.btn_start) << 3
-                | u8::from(self.btn_up) << 4
-                | u8::from(self.btn_right) << 5
-                | u8::from(self.btn_down) << 6
-                | u8::from(self.btn_left) << 7
+                | u8::from(self.input_state.btn_start) << 3
+                | u8::from(self.input_state.btn_up) << 4
+                | u8::from(self.input_state.btn_right) << 5
+                | u8::from(self.input_state.btn_down) << 6
+                | u8::from(self.input_state.btn_left) << 7
         )
     }
 
     fn digital_switches_high(&self) -> u8 {
         // invert inputs (0=Pressed, 1=Released)
         !(
-            u8::from(self.btn_l2) << 0
-                | u8::from(self.btn_r2) << 1
-                | u8::from(self.btn_l1) << 2
-                | u8::from(self.btn_r1) << 3
-                | u8::from(self.btn_triangle) << 4
-                | u8::from(self.btn_circle) << 5
-                | u8::from(self.btn_cross) << 6
-                | u8::from(self.btn_square) << 7
+            u8::from(self.input_state.btn_l2) << 0
+                | u8::from(self.input_state.btn_r2) << 1
+                | u8::from(self.input_state.btn_l1) << 2
+                | u8::from(self.input_state.btn_r1) << 3
+                | u8::from(self.input_state.btn_triangle) << 4
+                | u8::from(self.input_state.btn_circle) << 5
+                | u8::from(self.input_state.btn_cross) << 6
+                | u8::from(self.input_state.btn_square) << 7
         )
+    }
+
+    pub fn update_input(&mut self, new_state: InputState) {
+        self.input_state = new_state;
     }
 }
 
@@ -163,7 +172,7 @@ impl Sio0 {
         //trace!("Read stat");
 
         u32::from(self.tx_state != TxState::Disabled)				// TX FIFO Not Full
-			| (u32::from(!self.rx_fifo.is_empty()) << 1)		// RX FIFO Not Empty
+			| (u32::from(!self.rx_fifo.is_empty()) << 1)		    // RX FIFO Not Empty
 			| (u32::from(self.tx_state == TxState::Ready) << 2)		// TX Idle
             | (u32::from(self.ack) << 7)                            // /ACK low
 			| (u32::from(self.irq) << 9)                            // IRQ fired

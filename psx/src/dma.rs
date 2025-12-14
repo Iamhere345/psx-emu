@@ -363,9 +363,6 @@ impl DmaController {
 		match addr {
 			// channel registers
 			0x1F801080	..= 0x1F8010EF => {
-				if channel == 4 {
-					error!("[0x{addr:X}] DMA{channel} write32 0x{write:X}");
-				}
 				trace!("[0x{addr:X}] DMA{channel} write32 0x{write:X}");
 				self.channels[channel as usize].write32(addr, write)
 			},

@@ -9,7 +9,7 @@ mod dma;
 pub mod cdrom;
 mod interrupts;
 mod timers;
-mod sio0;
+pub mod sio0;
 mod kernel;
 mod spu;
 mod scheduler;
@@ -101,46 +101,8 @@ impl PSXEmulator {
 		self.bus.cdrom.load_disc(disc);
 	}
 
-	pub fn update_input(
-		&mut self,
-
-		up: bool,
-		down: bool,
-		left: bool,
-		right: bool,
-
-		cross: bool,
-		square: bool,
-		triangle: bool,
-		circle: bool,
-
-		l1: bool,
-		l2: bool,
-		r1: bool,
-		r2: bool,
-
-		start: bool,
-		select: bool,
-	) {
-		let ctx = &mut self.bus.sio0.controller_state;
-
-		ctx.btn_up = up;
-		ctx.btn_down = down;
-		ctx.btn_left = left;
-		ctx.btn_right = right;
-
-		ctx.btn_cross = cross;
-		ctx.btn_square = square;
-		ctx.btn_triangle = triangle;
-		ctx.btn_circle = circle;
-
-		ctx.btn_l1 = l1;
-		ctx.btn_l2 = l2;
-		ctx.btn_r1 = r1;
-		ctx.btn_r2 = r2;
-
-		ctx.btn_start = start;
-		ctx.btn_select = select;
+	pub fn update_input(&mut self, new_state: crate::sio0::InputState) {
+		self.bus.sio0.controller_state.update_input(new_state);
 	}
 
 	pub fn get_display_res(&self) -> (usize, usize) {

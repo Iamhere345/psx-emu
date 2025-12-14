@@ -6,6 +6,7 @@ use app::Desktop;
 
 pub mod components;
 mod app;
+mod input;
 
 fn main() {
 

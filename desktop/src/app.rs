@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use eframe::egui::{self, CentralPanel, Key};
+use eframe::egui::{self, CentralPanel};
 use eframe::{App, CreationContext};
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex, TabViewer};
 use rodio::buffer::SamplesBuffer;
@@ -11,25 +11,11 @@ use psx::PSXEmulator;
 use crate::components::breakpoints::Breakpoints;
 use crate::components::kernel_logger::KernelLogger;
 use crate::components::{control::*, disassembly::*, tty_logger::*, display::*};
+use crate::input::*;
 
 type Tab = String;
 
 pub const BIOS_PATH: &str = "res/SCPH1001.bin";
-
-const BTN_UP: 		Key = Key::W;
-const BTN_DOWN: 	Key = Key::S;
-const BTN_LEFT: 	Key = Key::A;
-const BTN_RIGHT: 	Key = Key::D;
-const BTN_CROSS: 	Key = Key::K;
-const BTN_SQUARE: 	Key = Key::J;
-const BTN_TRIANGLE: Key = Key::I;
-const BTN_CIRCLE: 	Key = Key::L;
-const BTN_L1: 		Key = Key::Q;
-const BTN_L2: 		Key = Key::Num1;
-const BTN_R1: 		Key = Key::E;
-const BTN_R2: 		Key = Key::Num3;
-const BTN_START: 	Key = Key::Enter;
-const BTN_SELECT: 	Key = Key::Backslash;
 
 pub struct FrontendState {
 	psx: PSXEmulator,
@@ -41,6 +27,8 @@ pub struct FrontendState {
 	kernel_logger: KernelLogger,
 	disassembly: Disassembly,
 	breakpoints: Breakpoints,
+
+	input: Input,
 
 	new_breakpoint_open: bool,
 
@@ -92,6 +80,10 @@ impl App for Desktop {
 						}
 					}
 				});
+
+				ui.separator();
+
+				self.context.input.show_settings(ui);
 			});
 		});
 
@@ -167,6 +159,8 @@ impl FrontendState {
 			disassembly: Disassembly::new(),
 			breakpoints: Breakpoints::new(),
 
+			input: Input::new(),
+
 			new_breakpoint_open: false,
 
 			stream_handle: stream_handle,
@@ -174,33 +168,9 @@ impl FrontendState {
 
 	}
 
-	fn is_keyboard_input_down(&mut self, key: Key, ctx: &egui::Context) -> bool {
-		ctx.input(|input| input.key_down(key))
-	}
-
-	fn handle_input(&mut self, ctx: &egui::Context) {
-		let up = self.is_keyboard_input_down(BTN_UP, ctx);
-		let down = self.is_keyboard_input_down(BTN_DOWN, ctx);
-		let left = self.is_keyboard_input_down(BTN_LEFT, ctx);
-		let right = self.is_keyboard_input_down(BTN_RIGHT, ctx);
-		let cross = self.is_keyboard_input_down(BTN_CROSS, ctx);
-		let square = self.is_keyboard_input_down(BTN_SQUARE, ctx);
-		let triangle = self.is_keyboard_input_down(BTN_TRIANGLE, ctx);
-		let circle = self.is_keyboard_input_down(BTN_CIRCLE, ctx);
-		let l1 = self.is_keyboard_input_down(BTN_L1, ctx);
-		let l2 = self.is_keyboard_input_down(BTN_L2, ctx);
-		let r1 = self.is_keyboard_input_down(BTN_R1, ctx);
-		let r2 = self.is_keyboard_input_down(BTN_R2, ctx);
-		let start = self.is_keyboard_input_down(BTN_START, ctx);
-		let select = self.is_keyboard_input_down(BTN_SELECT, ctx);
-
-		self.psx.update_input(
-			up, down, left, right, cross, square, triangle, circle, l1, l2, r1, r2, start, select,
-		);
-	}
-
 	fn update(&mut self, ctx: &egui::Context) {
-		self.handle_input(ctx);
+		self.input.handle_events();
+		self.psx.update_input(self.input.get_input(ctx));
 
 		if !self.control.paused && !self.psx.breakpoint_hit {
 			self.psx.run_frame();

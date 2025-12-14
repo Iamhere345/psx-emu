@@ -165,6 +165,7 @@ impl AudioBuf {
 }
 
 #[derive(Clone, PartialEq)]
+#[allow(unpredictable_function_pointer_comparisons)]
 pub struct CmdResponse {
 	int_level: u8,
 	result: Vec<u8>,
