@@ -25,307 +25,353 @@ const MEMCARD_ADDR: usize = 0x81;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum TxState {
-    Disabled,
-    Ready,
-    Transfering { index: u8 }
+	Disabled,
+	Ready,
+	Transfering { index: u8 }
 }
 
 #[derive(Default)]
 pub struct InputState {
-    pub btn_up: bool,
-    pub btn_down: bool,
-    pub btn_left: bool,
-    pub btn_right: bool,
+	pub btn_up: bool,
+	pub btn_down: bool,
+	pub btn_left: bool,
+	pub btn_right: bool,
 
-    pub btn_cross: bool,
-    pub btn_square: bool,
-    pub btn_triangle: bool,
-    pub btn_circle: bool,
+	pub btn_cross: bool,
+	pub btn_square: bool,
+	pub btn_triangle: bool,
+	pub btn_circle: bool,
 
-    pub btn_l1: bool,
-    pub btn_l2: bool,
-    pub btn_r1: bool,
-    pub btn_r2: bool,
+	pub btn_l1: bool,
+	pub btn_l2: bool,
+	pub btn_l3: bool,
 
-    pub btn_select: bool,
-    pub btn_start: bool,
+	pub btn_r1: bool,
+	pub btn_r2: bool,
+	pub btn_r3: bool,
+
+	pub btn_select: bool,
+	pub btn_start: bool,
+
+	pub l_stick_x: u8,
+	pub l_stick_y: u8,
+	pub r_stick_x: u8,
+	pub r_stick_y: u8,
 }
 
 #[derive(Default)]
 pub struct ControllerState {
-    input_state: InputState
+	input_state: InputState,
+	analog_enabled: bool,
 }
 
 impl ControllerState {
-    fn new() -> Self {
-        Self::default()
-    }
+	fn new() -> Self {
+		Self::default()
+	}
 
-    fn digital_switches_low(&self) -> u8 {
-        // invert inputs (0=Pressed, 1=Released)
-        !(
-            u8::from(self.input_state.btn_select) << 0
-                | u8::from(true) << 1  // analog only
-                | u8::from(true) << 2  // analog only
-                | u8::from(self.input_state.btn_start) << 3
-                | u8::from(self.input_state.btn_up) << 4
-                | u8::from(self.input_state.btn_right) << 5
-                | u8::from(self.input_state.btn_down) << 6
-                | u8::from(self.input_state.btn_left) << 7
-        )
-    }
+	fn digital_switches_low(&self) -> u8 {
+		// invert inputs (0=Pressed, 1=Released)
+		!(
+			u8::from(self.input_state.btn_select) << 0
+				| u8::from(self.input_state.btn_l3 && self.analog_enabled) << 1  // analog only
+				| u8::from(self.input_state.btn_r3 && self.analog_enabled) << 2  // analog only
+				| u8::from(self.input_state.btn_start) << 3
+				| u8::from(self.input_state.btn_up) << 4
+				| u8::from(self.input_state.btn_right) << 5
+				| u8::from(self.input_state.btn_down) << 6
+				| u8::from(self.input_state.btn_left) << 7
+		)
+	}
 
-    fn digital_switches_high(&self) -> u8 {
-        // invert inputs (0=Pressed, 1=Released)
-        !(
-            u8::from(self.input_state.btn_l2) << 0
-                | u8::from(self.input_state.btn_r2) << 1
-                | u8::from(self.input_state.btn_l1) << 2
-                | u8::from(self.input_state.btn_r1) << 3
-                | u8::from(self.input_state.btn_triangle) << 4
-                | u8::from(self.input_state.btn_circle) << 5
-                | u8::from(self.input_state.btn_cross) << 6
-                | u8::from(self.input_state.btn_square) << 7
-        )
-    }
+	fn digital_switches_high(&self) -> u8 {
+		// invert inputs (0=Pressed, 1=Released)
+		!(
+			u8::from(self.input_state.btn_l2) << 0
+				| u8::from(self.input_state.btn_r2) << 1
+				| u8::from(self.input_state.btn_l1) << 2
+				| u8::from(self.input_state.btn_r1) << 3
+				| u8::from(self.input_state.btn_triangle) << 4
+				| u8::from(self.input_state.btn_circle) << 5
+				| u8::from(self.input_state.btn_cross) << 6
+				| u8::from(self.input_state.btn_square) << 7
+		)
+	}
 
-    pub fn update_input(&mut self, new_state: InputState) {
-        self.input_state = new_state;
-    }
+	pub fn update_input(&mut self, new_state: InputState) {
+		self.input_state = new_state;
+	}
+
+	pub fn set_analog_enabled(&mut self, set: bool) {
+		self.analog_enabled = set;
+	}
+
+	pub fn tx_reply(&self, index: u8) -> (u8, bool) {
+		if self.analog_enabled {
+			let reply = match index {
+				0 => 0x73,
+				1 => 0x5A,
+				2 => self.digital_switches_low(),
+				3 => self.digital_switches_high(),
+				4 => self.input_state.r_stick_x,
+				5 => self.input_state.r_stick_y,
+				6 => self.input_state.l_stick_x,
+				7 => self.input_state.l_stick_y,
+				_ => 0,
+			};
+
+			return (reply, index < 7);
+		} else {
+			let reply = match index {
+				0 => 0x41,
+				1 => 0x5A,
+				2 => self.digital_switches_low(),
+				3 => self.digital_switches_high(),
+				_ => 0,
+			};
+
+			return (reply, index < 3);
+		}
+	}
 }
 
 pub struct Sio0 {
-    pub controller_state: ControllerState,
+	pub controller_state: ControllerState,
 
-    rx_fifo: VecDeque<u8>,
-    tx_state: TxState,
+	rx_fifo: VecDeque<u8>,
+	tx_state: TxState,
 
-    tx_enable: bool,
-    cs: bool, // SIO0: chip select (active low), SIO1: data terminal ready (DTR) output level
-    rx_enable: bool, // SIO0: 0=only receive when /CS low 1=force receive a single byte,
+	tx_enable: bool,
+	cs: bool,       // SIO0: chip select (active low), SIO1: data terminal ready (DTR) output level
+	rx_enable: bool, // SIO0: 0=only receive when /CS low 1=force receive a single byte,
 
-    tx_ie: bool,     // TX/RX interrupt enable
-    rx_ie: bool,     // ^
-    rx_int_mode: u8, // 0..3 = IRQ when RX FIFO contains 1,2,4,8 bytes
-    ack_ie: bool, // when SIO_STAT.7  ;DSR high or /ACK low (more data request)
-    
-    port_select: bool, // port 1 / port 2
-    
-    // stubbed
-    sio_mode: u16,
-    baudrate: u16,
-    
-    irq: bool,
-    ack: bool,    // acknowledge / "get more data request"
+	tx_ie: bool,     // TX/RX interrupt enable
+	rx_ie: bool,     // ^
+	rx_int_mode: u8, // 0..3 = IRQ when RX FIFO contains 1,2,4,8 bytes
+	ack_ie: bool, // when SIO_STAT.7  ;DSR high or /ACK low (more data request)
+	
+	port_select: bool, // port 1 / port 2
+	
+	// stubbed
+	sio_mode: u16,
+	baudrate: u16,
+	
+	irq: bool,
+	ack: bool,    // acknowledge / "get more data request"
 }
 
 impl Sio0 {
-    pub fn new() -> Self {
-        Self {
-            controller_state: ControllerState::new(),
+	pub fn new() -> Self {
+		Self {
+			controller_state: ControllerState::new(),
 
-            rx_fifo: VecDeque::new(),
-            tx_state: TxState::Disabled,
+			rx_fifo: VecDeque::new(),
+			tx_state: TxState::Disabled,
 
-            tx_enable: false,
-            cs: true,
-            rx_enable: false,
+			tx_enable: false,
+			cs: true,
+			rx_enable: false,
 
-            tx_ie: false,
-            rx_ie: false,
-            rx_int_mode: 0,
-            ack_ie: false,
-            
-            port_select: false,
-            
-            sio_mode: 0,
-            baudrate: 0,
-            
-            irq: false,
-            ack: false,
-        }
-    }
+			tx_ie: false,
+			rx_ie: false,
+			rx_int_mode: 0,
+			ack_ie: false,
+			
+			port_select: false,
+			
+			sio_mode: 0,
+			baudrate: 0,
+			
+			irq: false,
+			ack: false,
+		}
+	}
 
-    pub fn read32(&mut self, addr: u32) -> u32 {
-        match addr {
-            0x1F801040 => self.read_rx(),
-            0x1F801044 => self.read_stat(),
-            0x1F801048 => self.read_mode().into(),
-            0x1F80104A => self.read_ctrl().into(),
-            0x1F80104E => self.baudrate.into(),
-            _ => unreachable!()
-        }
-    }
+	pub fn read32(&mut self, addr: u32) -> u32 {
+		match addr {
+			0x1F801040 => self.read_rx(),
+			0x1F801044 => self.read_stat(),
+			0x1F801048 => self.read_mode().into(),
+			0x1F80104A => self.read_ctrl().into(),
+			0x1F80104E => self.baudrate.into(),
+			_ => unreachable!()
+		}
+	}
 
-    pub fn write32(&mut self, addr: u32, write: u32, scheduler: &mut Scheduler) {
-        match addr {
-            0x1F801040 => self.write_tx(write as u8, scheduler),
-            0x1F801044 => {},
-            0x1F801048 => self.write_mode(write as u16),
-            0x1F80104A => self.write_ctrl(write as u16),
-            0x1F80104E => self.baudrate = write as u16,
-            _ => unreachable!()
-        }
-    }
+	pub fn write32(&mut self, addr: u32, write: u32, scheduler: &mut Scheduler) {
+		match addr {
+			0x1F801040 => self.write_tx(write as u8, scheduler),
+			0x1F801044 => {},
+			0x1F801048 => self.write_mode(write as u16),
+			0x1F80104A => self.write_ctrl(write as u16),
+			0x1F80104E => self.baudrate = write as u16,
+			_ => unreachable!()
+		}
+	}
 
-    fn read_stat(&self) -> u32 {
-        //trace!("Read stat");
+	fn read_stat(&self) -> u32 {
+		//trace!("Read stat");
 
-        u32::from(self.tx_state != TxState::Disabled)				// TX FIFO Not Full
+		u32::from(self.tx_state != TxState::Disabled)				// TX FIFO Not Full
 			| (u32::from(!self.rx_fifo.is_empty()) << 1)		    // RX FIFO Not Empty
 			| (u32::from(self.tx_state == TxState::Ready) << 2)		// TX Idle
-            | (u32::from(self.ack) << 7)                            // /ACK low
+			| (u32::from(self.ack) << 7)                            // /ACK low
 			| (u32::from(self.irq) << 9)                            // IRQ fired
-    }
+	}
 
-    fn read_mode(&self) -> u16 {
-        self.sio_mode
-    }
+	fn read_mode(&self) -> u16 {
+		self.sio_mode
+	}
 
-    fn write_mode(&mut self, write: u16) {
-        self.sio_mode = write;
-    }
+	fn write_mode(&mut self, write: u16) {
+		self.sio_mode = write;
+	}
 
-    fn read_ctrl(&self) -> u16 {
-        trace!("read ctrl");
-        
-        u16::from(self.tx_enable)
-        | u16::from(self.cs) << 1
-        | u16::from(self.rx_enable) << 2
-        | u16::from(self.rx_int_mode) << 9
-        | u16::from(self.tx_ie) << 10
-        | u16::from(self.rx_ie) << 11
-        | u16::from(self.ack_ie) << 12
-        | u16::from(self.port_select) << 13
-        
-    }
+	fn read_ctrl(&self) -> u16 {
+		trace!("read ctrl");
+		
+		u16::from(self.tx_enable)
+		| u16::from(self.cs) << 1
+		| u16::from(self.rx_enable) << 2
+		| u16::from(self.rx_int_mode) << 9
+		| u16::from(self.tx_ie) << 10
+		| u16::from(self.rx_ie) << 11
+		| u16::from(self.ack_ie) << 12
+		| u16::from(self.port_select) << 13
+		
+	}
 
-    fn write_ctrl(&mut self, write: u16) {
-        trace!("write ctrl 0x{write:X} state: {:?}", self.tx_state);
-        
-        self.tx_enable = write & 1 != 0;
-        
-        if self.tx_enable && self.tx_state == TxState::Disabled {
-            trace!("enable TX");
-            self.tx_state = TxState::Ready;
-        } else if self.tx_enable == false {
-            trace!("disable TX");
-            self.tx_state = TxState::Disabled;
-        }
-        
-        self.cs = (write >> 1) & 1 != 0;
-        self.rx_enable = (write >> 2) & 1 != 0;
-        
-        self.irq = !((write >> 4) != 0);
+	fn write_ctrl(&mut self, write: u16) {
+		trace!("write ctrl 0x{write:X} state: {:?}", self.tx_state);
+		
+		self.tx_enable = write & 1 != 0;
+		
+		if self.tx_enable && self.tx_state == TxState::Disabled {
+			trace!("enable TX");
+			self.tx_state = TxState::Ready;
+		} else if self.tx_enable == false {
+			trace!("disable TX");
+			self.tx_state = TxState::Disabled;
+		}
+		
+		self.cs = (write >> 1) & 1 != 0;
+		self.rx_enable = (write >> 2) & 1 != 0;
+		
+		self.irq = !((write >> 4) != 0);
 
-        if (write >> 6) & 1 != 0 {
-            trace!("SIO0 reset");
+		if (write >> 6) & 1 != 0 {
+			trace!("SIO0 reset");
 
-            self.sio_mode = 0xC;
-            self.write_ctrl(0);
-            self.rx_fifo.clear();
+			self.sio_mode = 0xC;
+			self.write_ctrl(0);
+			self.rx_fifo.clear();
 
-            return;
-        }
+			return;
+		}
 
-        self.rx_int_mode = ((write >> 9) & 3) as u8;
-        self.tx_ie = (write >> 10) & 1 != 0;
-        self.rx_ie = (write >> 11) & 1 != 0;
-        self.ack_ie = (write >> 12) & 1 != 0;
-        self.port_select = (write >> 13) & 1 != 0;
-    }
+		self.rx_int_mode = ((write >> 9) & 3) as u8;
+		self.tx_ie = (write >> 10) & 1 != 0;
+		self.rx_ie = (write >> 11) & 1 != 0;
+		self.ack_ie = (write >> 12) & 1 != 0;
 
-    fn write_tx(&mut self, write: u8, scheduler: &mut Scheduler) {
-        trace!("write TX 0x{write:X} (state: {:?})", self.tx_state);
+		let old_port = self.port_select;
+		self.port_select = (write >> 13) & 1 != 0;
+
+		// reset state machine when CS is low or the selected port is changed
+		if !self.cs || self.port_select != old_port {
+			trace!("CS: {} PS: {}", self.cs, self.port_select);
+			self.rx_fifo.clear();
+			self.tx_state = TxState::Disabled;
+		}
+	}
+
+	fn write_tx(&mut self, write: u8, scheduler: &mut Scheduler) {
+		trace!("write TX 0x{write:X} (state: {:?})", self.tx_state);
 
 		self.tx_state = match self.tx_state {
-            TxState::Disabled => {
-                TxState::Disabled
-            },
-            TxState::Ready => {
-                if write as usize == CONTROLLER_ADDR {
-                    
-                    if !self.port_select && !self.cs || self.port_select && self.cs {
-                        self.push_rx(scheduler, 0xFF, false);
-                        self.ack = false;
-                        return;
-                    }
-                    // reply Hi-Z
-                    self.push_rx(scheduler, 0, true);
-                    // fire an interrupt whenever a byte is received by a device
-                    trace!("start transfer");
+			TxState::Disabled => {
+				TxState::Disabled
+			},
+			TxState::Ready => {
+				if write as usize == CONTROLLER_ADDR {
+					
+					// port 2 is stubbed
+					if self.port_select {
+						//trace!("communication aborted (ps: {} cs: {})", self.port_select, self.cs);
+						self.push_rx(scheduler, 0xFF, false);
+						self.ack = false;
+						return;
+					}
+					// reply Hi-Z
+					self.push_rx(scheduler, 0, true);
+					// fire an interrupt whenever a byte is received by a device
+					trace!("start transfer");
 
-                } else if write as usize == MEMCARD_ADDR {
-                    warn!("tried to read memcard");
+				} else if write as usize == MEMCARD_ADDR {
+					warn!("tried to read memcard");
 
-                    self.push_rx(scheduler, 0xFF, false);
-                    self.ack = false;
-                    return;
-                }
+					self.push_rx(scheduler, 0xFF, false);
+					self.ack = false;
+					return;
+				}
 
-                TxState::Transfering { index: 0 }
-            },
-            TxState::Transfering { index } => {
-                // TODO for now always assuming the device is a controller
-                if index == 0 && write != 0x42 && self.port_select == false {
-                    // invalid command, abort transfer
-                    error!("abort transfer 0x{write:X}");
-                    self.push_rx(scheduler, 0xFF, false);
-                    TxState::Ready
-                } else {
-                    let reply = match index {
-                        0 => 0x41,
-                        1 => 0x5A,
-                        2 => self.controller_state.digital_switches_low(),
-                        3 => self.controller_state.digital_switches_high(),
-                        _ => 0,
-                    };
+				TxState::Transfering { index: 0 }
+			},
+			TxState::Transfering { index } => {
+				// TODO for now always assuming the device is a controller
+				if index == 0 && write != 0x42 {
+					// invalid command, abort transfer
+					error!("abort transfer 0x{write:X}");
+					self.push_rx(scheduler, 0xFF, false);
+					TxState::Ready
+				} else {
+					let (reply, should_int) = self.controller_state.tx_reply(index);
 
-                    trace!("controller reply 0x{reply:X} (index: {index})");
+					trace!("write 0x{write:X} controller reply 0x{reply:X} (index: {index}) (int: {should_int})");
 
-                    // don't ack bytes past normal communication sequence
-                    // last byte shouldn't be acknowldge because no more data should be sent (ack = "more-data-request")
-                    self.push_rx(scheduler, reply, index < 3);
-                    
-                    TxState::Transfering { index: index + 1 }
-                }
-            }
-        };
+					// don't ack bytes past normal communication sequence
+					// last byte shouldn't be acknowldge because no more data should be sent (ack = "more-data-request")
+					self.push_rx(scheduler, reply, should_int);
+					
+					TxState::Transfering { index: index + 1 }
+				}
+			}
+		};
 
 	}
 
-    fn read_rx(&mut self) -> u32 {
-        if let Some(rx) = self.rx_fifo.pop_front() {
-            let pop = rx as u32;
+	fn read_rx(&mut self) -> u32 {
+		if let Some(rx) = self.rx_fifo.pop_front() {
+			let pop = rx as u32;
 
-            trace!("read rx 0x{pop:X}");
+			trace!("read rx 0x{pop:X}");
 
-            pop
-        } else {
-            trace!("read rx 0");
-            0
-        }
-    }
+			pop
+		} else {
+			trace!("read rx 0");
+			0
+		}
+	}
 
-    fn push_rx(&mut self, scheduler: &mut Scheduler, value: u8, interrupt: bool) {
-        scheduler.schedule_event(SchedulerEvent::new(EventType::Sio0Rx(value, interrupt)), 1500);
-    }
+	fn push_rx(&mut self, scheduler: &mut Scheduler, value: u8, interrupt: bool) {
+		scheduler.schedule_event(SchedulerEvent::new(EventType::Sio0Rx(value, interrupt)), 1500);
+	}
 
-    pub fn rx_event(&mut self, scheduler: &mut Scheduler, value: u8, interrupt: bool) {
-        self.rx_fifo.push_front(value);
+	pub fn rx_event(&mut self, scheduler: &mut Scheduler, value: u8, interrupt: bool) {
+		self.rx_fifo.push_front(value);
 
-        if interrupt {
-            self.ack = true;
-            scheduler.schedule_event(SchedulerEvent::new(EventType::Sio0Irq), 100);
-        }
-    }
+		if interrupt {
+			self.ack = true;
+			scheduler.schedule_event(SchedulerEvent::new(EventType::Sio0Irq), 100);
+		}
+	}
 
-    pub fn irq_event(&mut self, interrupts: &mut Interrupts) {
-        trace!("IRQ7");
+	pub fn irq_event(&mut self, interrupts: &mut Interrupts) {
+		trace!("IRQ7");
 
-        self.ack = false;
-        self.irq = true;
+		self.ack = false;
+		self.irq = true;
 
-        interrupts.raise_interrupt(crate::interrupts::InterruptFlag::Controller);
-    }
+		interrupts.raise_interrupt(crate::interrupts::InterruptFlag::Controller);
+	}
 }

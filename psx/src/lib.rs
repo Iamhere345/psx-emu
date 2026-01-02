@@ -101,8 +101,9 @@ impl PSXEmulator {
 		self.bus.cdrom.load_disc(disc);
 	}
 
-	pub fn update_input(&mut self, new_state: crate::sio0::InputState) {
+	pub fn update_input(&mut self, new_state: crate::sio0::InputState, analog_enabled: bool) {
 		self.bus.sio0.controller_state.update_input(new_state);
+		self.bus.sio0.controller_state.set_analog_enabled(analog_enabled);
 	}
 
 	pub fn get_display_res(&self) -> (usize, usize) {

@@ -170,7 +170,7 @@ impl FrontendState {
 
 	fn update(&mut self, ctx: &egui::Context) {
 		self.input.handle_events();
-		self.psx.update_input(self.input.get_input(ctx));
+		self.psx.update_input(self.input.get_input(ctx), self.input.analog_enabled);
 
 		if !self.control.paused && !self.psx.breakpoint_hit {
 			self.psx.run_frame();

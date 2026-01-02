@@ -1001,8 +1001,8 @@ impl Spu {
 
 				if !self.control.spu_enable {
 					for mut voice in self.voices {
-						voice.key_off();
 						voice.adsr.level = 0;
+						voice.key_off();
 					}
 				}
 

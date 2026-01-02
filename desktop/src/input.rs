@@ -24,6 +24,8 @@ const BTN_SELECT: 	Key = Key::Backslash;
 pub struct Input {
 	active_gamepad: Option<GamepadId>,
 	gilrs: Gilrs,
+
+	pub analog_enabled: bool,
 }
 
 impl Input {
@@ -31,6 +33,8 @@ impl Input {
 		Self {
 			active_gamepad: None,
 			gilrs: Gilrs::new().unwrap(),
+
+			analog_enabled: false,
 		}
 	}
 
@@ -50,11 +54,19 @@ impl Input {
 
 					btn_l1: gamepad.is_pressed(Button::LeftTrigger),
 					btn_l2: gamepad.is_pressed(Button::LeftTrigger2),
+					btn_l3: gamepad.is_pressed(Button::LeftThumb),
+
 					btn_r1: gamepad.is_pressed(Button::RightTrigger),
 					btn_r2: gamepad.is_pressed(Button::RightTrigger2),
+					btn_r3: gamepad.is_pressed(Button::RightThumb),
 
 					btn_start: gamepad.is_pressed(Button::Start),
 					btn_select: gamepad.is_pressed(Button::Select),
+
+					l_stick_x: self.get_stick_x(&gamepad, Axis::LeftStickX),
+					l_stick_y: self.get_stick_y(&gamepad, Axis::LeftStickY),
+					r_stick_x: self.get_stick_x(&gamepad, Axis::RightStickX),
+					r_stick_y: self.get_stick_y(&gamepad, Axis::RightStickY),
 				};
 				
 			}
@@ -65,16 +77,27 @@ impl Input {
 			btn_down: self.is_keyboard_input_down(BTN_DOWN, ctx),
 			btn_left: self.is_keyboard_input_down(BTN_LEFT, ctx),
 			btn_right: self.is_keyboard_input_down(BTN_RIGHT, ctx),
+
 			btn_cross: self.is_keyboard_input_down(BTN_CROSS, ctx),
 			btn_square: self.is_keyboard_input_down(BTN_SQUARE, ctx),
 			btn_triangle: self.is_keyboard_input_down(BTN_TRIANGLE, ctx),
 			btn_circle: self.is_keyboard_input_down(BTN_CIRCLE, ctx),
+
 			btn_l1: self.is_keyboard_input_down(BTN_L1, ctx),
 			btn_l2: self.is_keyboard_input_down(BTN_L2, ctx),
+			btn_l3: false,
+
 			btn_r1: self.is_keyboard_input_down(BTN_R1, ctx),
 			btn_r2: self.is_keyboard_input_down(BTN_R2, ctx),
+			btn_r3: false,
+
 			btn_start: self.is_keyboard_input_down(BTN_START, ctx),
 			btn_select: self.is_keyboard_input_down(BTN_SELECT, ctx),
+
+			l_stick_x: 0x80,
+			l_stick_y: 0x80,
+			r_stick_x: 0x80,
+			r_stick_y: 0x80,
 		}
 	}
 
@@ -102,6 +125,22 @@ impl Input {
 		ctx.input(|input| input.key_down(key))
 	}
 
+	fn get_stick_x(&self, gamepad: &Gamepad, axis: Axis) -> u8 {
+		if let Some(data) = gamepad.axis_data(axis) {
+			return ((data.value() + 1.0) * 127.5).round() as u8;
+		}
+
+		0x80
+	}
+
+	fn get_stick_y(&self, gamepad: &Gamepad, axis: Axis) -> u8 {
+		if let Some(data) = gamepad.axis_data(axis) {
+			return ((data.value() * -1.0 + 1.0) * 127.5).round() as u8;
+		}
+
+		0x80
+	}
+
 	pub fn show_settings(&mut self, ui: &mut Ui) {
 		let controllers: Vec<(GamepadId, Gamepad<'_>)> = self.gilrs.gamepads().filter(|(_, gamepad)| gamepad.name() != EXCLUDED_CONTROLLER).collect();
 
@@ -121,5 +160,7 @@ impl Input {
 
 				ui.selectable_value(&mut self.active_gamepad, None, "keyboard")
 			});
+		
+		ui.checkbox(&mut self.analog_enabled, "Analog");
 	}
 }
