@@ -161,11 +161,16 @@ impl Bus {
 				self.read8(unmasked_addr, scheduler),
 				self.read8(unmasked_addr + 1, scheduler)
 			]),
+			DMA_START	..= DMA_END => u16::from_le_bytes([
+				self.read8(unmasked_addr, scheduler),
+				self.read8(unmasked_addr + 1, scheduler)
+			]),
 			IRQ_START			..= IRQ_END => self.interrupts.read32(addr) as u16,
 			SPU_START			..= SPU_END => self.spu.read16(addr),
 			PAD_START			..= PAD_END => self.sio0.read32(addr) as u16,
 			SIO1_START			..= SIO1_END => { warn!("[0x{addr:X}] Unhandled SIO1 read16"); 0 }
 			TIMERS_START		..= TIMERS_END => self.timers.read32(addr, scheduler) as u16,
+			0x1F801130 => 0,
 			MEMCONTROL_START	..= MEMCONTROL_END => { warn!("[{addr:X}] Unhandled read16 from memcontrol"); 0 },
 
 			_ => panic!("unhandled read16 0x{addr:X}/0x{unmasked_addr:X}"),
@@ -259,7 +264,9 @@ impl Bus {
 		}
 	}
 
-	pub fn write16(&mut self, unmasked_addr: u32, write: u16, scheduler: &mut Scheduler) {
+	pub fn write16(&mut self, unmasked_addr: u32, write_unmasked: u32, scheduler: &mut Scheduler) {
+		// ? LH/LB puts the entire 32bit register on the bus, although most devices will only get 16bits (required for BIOS soundscope)
+		let write = write_unmasked as u16;
 
 		if unmasked_addr % 2 != 0 {
 			panic!("unaligned 16 bit write [0x{unmasked_addr:X}] 0x{write:X}");
@@ -276,7 +283,8 @@ impl Bus {
 			PAD_START 		..= PAD_END => self.sio0.write32(addr, write.into(), scheduler),
 			SIO1_START		..= SIO1_END => warn!("[0x{addr:X}] Unhandled SIO1 write16 0x{write:X}"),
 			MEMCONTROL_START..= MEMCONTROL_END => warn!("[{addr:X}] Unhandled write16 from memcontrol"),
-			
+			DMA_START		..= DMA_END => self.dma.write32(addr, write_unmasked),
+
 			RAM_START		..= RAM_END => {
 				self.write8(unmasked_addr, lsb, scheduler);
 				self.write8(unmasked_addr + 1, msb, scheduler);

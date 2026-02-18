@@ -281,7 +281,7 @@ impl Sio0 {
 		if !self.cs || self.port_select != old_port {
 			trace!("CS: {} PS: {}", self.cs, self.port_select);
 			self.rx_fifo.clear();
-			self.tx_state = TxState::Disabled;
+			self.tx_state = TxState::Ready;
 		}
 	}
 

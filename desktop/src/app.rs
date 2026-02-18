@@ -15,7 +15,7 @@ use crate::input::*;
 
 type Tab = String;
 
-pub const BIOS_PATH: &str = "res/SCPH1001.bin";
+pub const BIOS_PATH: &str = "res/SCPH7501.bin";
 
 pub struct FrontendState {
 	psx: PSXEmulator,

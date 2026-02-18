@@ -820,9 +820,9 @@ impl Spu {
 		}
 
 		// write to capture buffers
-		// CD L/R buffer (write 0 since it isn't implemented yet)
-		self.sram.write16(CDL_BUF_START + self.capture_buf_index, 0);
-		self.sram.write16(CDR_BUF_START + self.capture_buf_index, 0);
+		// CD L/R buffer
+		self.sram.write16(CDL_BUF_START + self.capture_buf_index, cd_sample.0 as u16);
+		self.sram.write16(CDR_BUF_START + self.capture_buf_index, cd_sample.1 as u16);
 		// Voice 1/3 buffer
 		self.sram.write16(VOICE1_BUF_START + self.capture_buf_index, self.voices[1].mono_sample as u16);
 		self.sram.write16(VOICE3_BUF_START + self.capture_buf_index, self.voices[3].mono_sample as u16);

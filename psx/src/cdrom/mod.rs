@@ -457,7 +457,7 @@ impl Cdrom {
 	}
 
 	pub fn get_audio_sample(&mut self) -> (i16, i16) {
-		if !self.audio_muted {
+		if !self.audio_muted && self.drive_state == DriveState::Play {
 			// big endian as we are removing fifo entries from the front
 			let sample_l = self.audio_buf.get_sample();
 			let sample_r = self.audio_buf.get_sample();

@@ -53,6 +53,7 @@ impl Cdrom {
 		let mut second_response = CmdResponse {
 			int_level: 2,
 			result: vec![stat, flags, disk_type, atip, b'S', b'C', b'E', b'A'],
+			//result: vec![0x0A, (1 << 4) | (1 << 7), 0, atip, 0, 0, 0, 0], // force audio disc
 
 			second_response: None,
 			on_complete: None,
@@ -372,7 +373,7 @@ impl Cdrom {
 			trace!("Play sector {} ({} + {}) {} {:?}", (self.current_seek + self.read_offset), self.current_seek, self.read_offset, self.read_paused, self.drive_state);
 
 			let sector = disc.read_sector(self.current_seek + self.read_offset);
-			let data = sector.whole_sector();
+			let data = sector.audio_sector();
 
 			self.audio_buf.read_sector(data);
 
@@ -393,11 +394,21 @@ impl Cdrom {
 		None
 	}
 
-	// TODO
 	pub fn stop(&mut self) -> (CmdResponse, u64) {
+		debug!("Stop");
+
 		self.drive_state = DriveState::Idle;
 
-		(CmdResponse::int3_status(self), AVG_CYCLES)
+		let mut first_response = CmdResponse::int3_status(&self);
+		let second_response = CmdResponse {
+			int_level: 2,
+			result: vec![self.get_stat()],
+			second_response: None,
+			on_complete: None,
+		};
+
+		first_response.second_response = Some((Box::new(second_response), DELAY_1MS));
+		(first_response, AVG_CYCLES)
 	}
 
 	pub fn init(&mut self) -> (CmdResponse, u64) {

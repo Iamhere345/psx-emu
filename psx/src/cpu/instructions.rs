@@ -394,7 +394,7 @@ impl R3000 {
 		let offset = self.registers.read_gpr(instr.reg_src());
 		let addr = offset.wrapping_add(instr.imm16_se());
 
-		self.store16(bus, addr, self.registers.read_gpr(instr.reg_tgt()) as u16, scheduler);
+		self.store16(bus, addr, self.registers.read_gpr(instr.reg_tgt()), scheduler);
 	}
 
 	fn op_lh(&mut self, instr: Instruction, bus: &mut Bus, scheduler: &mut Scheduler) {
@@ -995,7 +995,7 @@ impl R3000 {
 		}
 	}
 	
-	fn store16(&mut self, bus: &mut Bus, addr: u32, write: u16, scheduler: &mut Scheduler) {
+	fn store16(&mut self, bus: &mut Bus, addr: u32, write: u32, scheduler: &mut Scheduler) {
 		if bus.write_breakpoints.contains(&addr) {
 			bus.breakpoint_hit = (true, addr);
 		}

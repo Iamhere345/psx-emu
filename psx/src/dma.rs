@@ -217,6 +217,7 @@ impl DmaControlRegister {
 
 }
 
+#[derive(Debug)]
 struct DmaInterruptRegister {
 	channel_int: u8,
 	channel_mask: u8,
@@ -256,7 +257,6 @@ impl DmaInterruptRegister {
 	}
 
 	pub fn write(&mut self, write: u32) {
-
 		self.int_cond = (write & 0x7F) as u8;
 		self.bus_error = (write >> 15) & 0x1 != 0;
 		self.channel_mask = ((write >> 16) & 0x7F) as u8;
@@ -264,7 +264,6 @@ impl DmaInterruptRegister {
 		self.channel_int &= !((write >> 24) & 0x7F) as u8;
 
 		self.set_master_int();
-
 	}
 
 	pub fn raise_int(&mut self, flag: u8, interrupts: &mut Interrupts) {

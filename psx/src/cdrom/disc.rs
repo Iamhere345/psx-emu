@@ -115,6 +115,7 @@ impl Disc {
 				end_lba: end_lba,
 			});
 
+			trace!("added track {track_num} start: {start_lba} end: {end_lba} total sectors: {total_sectors}");
 		}
 	}
 
@@ -184,6 +185,10 @@ impl Sector {
 
 	pub fn whole_sector(&self) -> &[u8] {
 		&self.data[0xC..]
+	}
+
+	pub fn audio_sector(&self) -> &[u8] {
+		&self.data
 	}
 
 	pub fn data_only(&self) -> &[u8] {
