@@ -139,9 +139,34 @@ impl Cdrom {
 		self.seek_target = CdIndex::from_bcd(minutes, seconds, sectors);
 		self.seek_complete = false;
 
-		debug!("setloc {}", self.seek_target);
+		debug!("SetLoc {}", self.seek_target);
 
 		(CmdResponse::int3_status(self), AVG_CYCLES)
+	}
+
+	pub fn get_loc_l(&mut self) -> (CmdResponse, u64) {
+		if let Some(disc) = &self.disc {
+			debug!("GetLocL");
+
+			let data = &self.data_fifo.buffer;
+
+			// fail when reading audio discs/audio tracks
+			if self.drive_state == DriveState::Seek || data[0xF] == 1 {
+				return (CmdResponse::error(&self, ERROR_CANNOT_RESPOND), AVG_CYCLES);
+			}
+			
+			let mut response = CmdResponse::int3_status(&self);
+			response.result = vec![
+				// amm, ass, asect, mode
+				data[0xC], data[0xD], data[0xE], data[0xF],
+				// file, channel, submode, codinginfo
+				data[0x10], data[0x11], data[0x12], data[0x13],
+			];
+
+			(response, AVG_CYCLES)
+		} else {
+			(CmdResponse::error(&self, ERROR_CANNOT_RESPOND), AVG_CYCLES)
+		}
 	}
 
 	pub fn get_loc_p(&mut self) -> (CmdResponse, u64) {

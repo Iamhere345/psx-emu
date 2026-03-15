@@ -388,6 +388,8 @@ impl Cdrom {
 			0x8 => self.stop(),
 			// Pause
 			0x9 => self.pause(),
+			// GetLocL
+			0x10 => self.get_loc_l(),
 			// GetLocP
 			0x11 => self.get_loc_p(),
 			// Init
