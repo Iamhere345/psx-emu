@@ -3,7 +3,7 @@ use log::*;
 
 const SECONDS_PER_MINUTE: usize = 60;
 const SECTORS_PER_SECOND: usize = 75;
-const BYTES_PER_SECTOR: usize = 0x930;
+pub const BYTES_PER_SECTOR: usize = 0x930;
 
 #[derive(Clone, Copy, Debug)]
 pub struct CdIndex {
@@ -33,6 +33,8 @@ impl CdIndex {
 	}
 
 	pub fn from_lba(lba: usize) -> Self {
+		let lba = lba + 150;
+
 		let minutes = lba / (SECTORS_PER_SECOND * SECONDS_PER_MINUTE);
 		let seconds = (lba / SECTORS_PER_SECOND) % SECONDS_PER_MINUTE;
 		let sectors = lba % SECTORS_PER_SECOND;
@@ -75,8 +77,8 @@ pub struct Track {
 	number: usize,
 	data: Vec<u8>,
 	sectors: usize,
-	start_lba: usize,
-	end_lba: usize,
+	pub start_lba: usize,
+	pub end_lba: usize,
 }
 
 impl Track {
@@ -101,7 +103,7 @@ impl Disc {
 		for track_data in tracks {
 			let sectors = track_data.len() / BYTES_PER_SECTOR;
 
-			let start_lba = total_sectors + 150 + (usize::from(track_num > 0) * 150);
+			let start_lba = total_sectors;
 			let end_lba = total_sectors + sectors;
 			
 			total_sectors += sectors;
@@ -134,6 +136,7 @@ impl Disc {
 
 	pub fn get_track_number(&self, sector_addr: usize) -> (usize, usize) {
 		let mut track_addr = 0;
+
 		for (track_num, track) in self.tracks.iter().enumerate() {
 			if sector_addr >= track_addr && sector_addr < track_addr + track.data.len() {
 				return (track_num, track_addr)
@@ -143,7 +146,7 @@ impl Disc {
 		}
 
 		panic!("couldn't find track");
-	}
+	} 
 
 	pub fn get_track_start(&self, track_num: usize) -> CdIndex {
 		CdIndex::from_lba(self.tracks[track_num - 1].start_lba)
@@ -159,7 +162,7 @@ impl Disc {
 		let index_lba = index.to_lba();
 
 		for (i,  track) in self.tracks.iter().enumerate() {
-			if index_lba >= track.start_lba && index_lba <= track.end_lba {
+			if index_lba >= track.start_lba && index_lba < track.end_lba {
 				return i
 			}
 		}

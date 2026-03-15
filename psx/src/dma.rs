@@ -169,8 +169,8 @@ impl Channel {
 		trace!("DMA{} active ({} && {})", self.channel_num, self.transfer_active, trigger);
 		
 		// TODO check which is more accurate
-		//self.transfer_active && trigger
-		self.transfer_active
+		self.transfer_active && trigger
+		//self.transfer_active
 	}
 }
 
@@ -322,8 +322,8 @@ impl DmaController {
 			0xF2 => (self.control.read() >> 16) as u8,
 			0xF3 => (self.control.read() >> 24) as u8,
 			// DICR
-			0xF4 => (self.irq.read() >> 0) as u8,
-			0xF5 => (self.irq.read() >> 8) as u8,
+			0xF4 => (self.irq.read() >> 00) as u8,
+			0xF5 => (self.irq.read() >> 08) as u8,
 			0xF6 => (self.irq.read() >> 16) as u8,
 			0xF7 => (self.irq.read() >> 24) as u8,
 
@@ -381,6 +381,8 @@ impl DmaController {
 	}
 
 	pub fn write8(&mut self, addr: u32, write: u8) {
+		debug!("[0x{addr:X}] DMA write8 0x{write:X}");
+
 		match addr & 0xFF {
 			// DPCR
 			0xF0 => self.control.write(u32::from(write) << 00),
@@ -388,10 +390,10 @@ impl DmaController {
 			0xF2 => self.control.write(u32::from(write) << 16),
 			0xF3 => self.control.write(u32::from(write) << 24),
 			// DICR
-			0xF4 => self.irq.write(u32::from(write) << 00),
-			0xF5 => self.irq.write(u32::from(write) << 08),
-			0xF6 => self.irq.write(u32::from(write) << 16),
-			0xF7 => self.irq.write(u32::from(write) << 24),
+			0xF4 => self.irq.write(u32::from(write) << 00 | self.irq.read() & 0xFFFFFF00),
+			0xF5 => self.irq.write(u32::from(write) << 08 | self.irq.read() & 0xFFFF00FF),
+			0xF6 => self.irq.write(u32::from(write) << 16 | self.irq.read() & 0xFF00FFFF),
+			0xF7 => self.irq.write(u32::from(write) << 24 | self.irq.read() & 0x00FFFFFF),
 
 			_ => unreachable!("[0x{addr:X}] DMA read8")
 		};
@@ -528,6 +530,13 @@ impl Bus {
 			SyncMode::Slice => channel.block_size * channel.block_amount,
 			SyncMode::LinkedList => unimplemented!()
 		};
+
+		if channel_num == CHANNEL_CDROM {
+			trace!("CDROM words left: {words_left} (reading 0x{:X} bytes)", words_left * 4);
+		}
+		if channel_num == CHANNEL_GPU {
+			trace!("GPU {:?} (0x{:X} * 0x{:X}) words left: 0x{words_left:X} (writing 0x{:X} halfwords)", channel.sync_mode, channel.block_size, channel.block_amount, words_left * 2);
+		}
 
 		trace!("doing DMA{channel_num} start: 0x{addr:X} words: 0x{words_left:X}");
 

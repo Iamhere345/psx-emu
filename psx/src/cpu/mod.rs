@@ -148,7 +148,7 @@ impl R3000 {
 
 		// check if last jump was to a kernel function
 		if self.in_delay_slot {
-			self.log_kernel_func();
+			self.log_kernel_func(bus);
 		}
 
 		let instruction = bus.read32(self.pc, scheduler);
@@ -233,7 +233,7 @@ impl R3000 {
 		}
 	}
 
-	fn log_kernel_func(&mut self) {
+	fn log_kernel_func(&mut self, bus: &mut Bus) {
 		let kernel_func = match self.pc {
 			0xA0 => {
 				let num = self.registers.read_gpr(9);
@@ -255,6 +255,26 @@ impl R3000 {
 			KernelFunction::ReturnFromException | KernelFunction::Rand
 				| KernelFunction::TestEvent | KernelFunction::Unknown => return,
 			//KernelFunction::OpenEvent => error!("$ra: 0x{:X}", self.registers.read_gpr(31)),
+			KernelFunction::Write => {
+				let file_desc = self.registers.read_gpr(4);
+
+				if file_desc == 1 || file_desc == 2 {
+					let char = bus.read32_debug(self.registers.read_gpr(5)) as u8 as char;
+
+					print!("{char}");
+					self.tty_buf.push(char);
+				}
+			},
+			KernelFunction::Putc => {
+				let file_desc = self.registers.read_gpr(5);
+
+				if file_desc == 1 || file_desc == 2 {
+					let char = bus.read32_debug(self.registers.read_gpr(4)) as u8 as char;
+
+					print!("{char}");
+					self.tty_buf.push(char);
+				}
+			}
 			_ => {}
 		}
 

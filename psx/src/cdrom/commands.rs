@@ -16,6 +16,9 @@ const ERROR_CANNOT_RESPOND:	u8 = 0x80;	// also if the disc is not inserted at al
 
 impl Cdrom {
 	pub fn nop(&self) -> (CmdResponse, u64) {
+		if !self.params_fifo.is_empty() {
+			return (CmdResponse::error(self, ERROR_INVALID_PARAMS), AVG_CYCLES);
+		}
 		debug!("Nop");
 
 		(CmdResponse::int3_status(self), AVG_CYCLES)
@@ -123,6 +126,7 @@ impl Cdrom {
 
 	pub fn set_loc(&mut self) -> (CmdResponse, u64) {
 		if self.params_fifo.len() < 3 {
+			error!("SetLoc: not enough params");
 			return (CmdResponse::error(&self, ERROR_INVALID_PARAMS), AVG_CYCLES);
 		}
 
@@ -148,25 +152,26 @@ impl Cdrom {
 				DriveState::Read => self.current_seek + self.read_offset,
 				DriveState::Play => self.current_seek,
 			};
-	
-			let (track, track_addr) = disc.get_track_number(current_sector.to_lba());
 
-			let relative_time = CdIndex::from_lba(current_sector.to_lba() - track_addr);
+			let (track, track_addr) = disc.get_track_number(current_sector.to_lba());
+			let relative_time = CdIndex::from_lba(current_sector.to_lba() - disc.tracks[track].start_lba);
+
+			debug!("GetLocP {current_sector}, relative: {relative_time}");
 
 			let index: u8 = 1;
 			
 			let mut response = CmdResponse::int3_status(&self);
 			response.result = vec![
-				track as u8,
-				index,
+				binary_to_bcd(track as u8),
+				binary_to_bcd(index),
 
-				relative_time.minutes,
-				relative_time.seconds,
-				relative_time.sectors,
+				binary_to_bcd(relative_time.minutes),
+				binary_to_bcd(relative_time.seconds),
+				binary_to_bcd(relative_time.sectors),
 
-				current_sector.minutes,
-				current_sector.seconds,
-				current_sector.seconds,
+				binary_to_bcd(current_sector.minutes),
+				binary_to_bcd(current_sector.seconds),
+				binary_to_bcd(current_sector.sectors),
 			];
 
 			(response, AVG_CYCLES)
@@ -225,6 +230,7 @@ impl Cdrom {
 
 	pub fn set_mode(&mut self) -> (CmdResponse, u64) {
 		if self.params_fifo.len() < 1 {
+			error!("SetMode: invalid params");
 			return (CmdResponse::error(&self, ERROR_INVALID_PARAMS), AVG_CYCLES);
 		}
 
@@ -282,6 +288,11 @@ impl Cdrom {
 				SectorSize::DataOnly => sector.data_only(),
 				SectorSize::WholeSector => sector.whole_sector()
 			};
+
+			/* let raw_sector = sector.audio_sector();
+			let sect_pos = CdIndex::from_bcd(raw_sector[0xC], raw_sector[0xD], raw_sector[0xE]);
+
+			debug!("ReadN sector: {} actual sector: {sect_pos}", self.current_seek + self.read_offset); */
 
 			self.data_fifo.read_sector(data);
 
@@ -398,6 +409,7 @@ impl Cdrom {
 		debug!("Stop");
 
 		self.drive_state = DriveState::Idle;
+		self.read_paused = true;
 
 		let mut first_response = CmdResponse::int3_status(&self);
 		let second_response = CmdResponse {

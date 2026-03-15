@@ -230,7 +230,7 @@ impl Bus {
 
 		match addr as usize {
 			BIOS_START			..=	BIOS_END => self.bios[addr as usize - BIOS_START],
-			RAM_START			..= RAM_END => self.ram[addr as usize - RAM_START],
+			RAM_START			..= RAM_END => self.ram[(addr as usize) & RAM_SIZE - RAM_START],
 			SCRATCHPAD_START	..= SCRATCHPAD_END => self.scratchpad[addr as usize - SCRATCHPAD_START],
 
 			_ => 0xDE

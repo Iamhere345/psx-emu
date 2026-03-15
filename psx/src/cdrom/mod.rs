@@ -112,6 +112,8 @@ impl DataFifo {
 	}
 
 	pub fn read_sector(&mut self, data: &[u8]) {
+		trace!("New data sector. size: 0x{:X}", data.len());
+
 		self.buffer[..data.len()].copy_from_slice(data);
 		self.index = 0;
 		self.len = data.len();
@@ -124,7 +126,11 @@ impl DataFifo {
 		} else {
 			let data = self.buffer[self.index];
 			self.index += 1;
-	
+			
+			if self.index == self.len {
+				warn!("sector buffer empty!");
+			}
+
 			data
 		}
 	}
@@ -150,6 +156,8 @@ impl AudioBuf {
 	pub fn read_sector(&mut self, data: &[u8]) {
 		self.buffer[..data.len()].copy_from_slice(data);
 		self.index = 0;
+
+		//assert!(self.buffer[..0xC].iter().eq([0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00].iter()))
 	}
 
 	pub fn get_sample(&mut self) -> i16 {
@@ -419,9 +427,9 @@ impl Cdrom {
 	fn get_stat(&self) -> u8 {
 		let result = (u8::from(self.motor_on) << 1) // motor state
 			| (u8::from(self.disc.is_none()) << 4)		// shell open
-			| (self.drive_state as u8);			// reading data sectors
+			| (self.drive_state as u8);					// reading data sectors
 		
-		trace!("getstat: 0b{result:b} (drive state: {:?}", self.drive_state);
+		trace!("getstat: 0b{result:b} (motor_on: {}, shell_open: {}, drive state: {:?})", self.motor_on, self.disc.is_none(), self.drive_state);
 
 		result
 	}

@@ -219,7 +219,7 @@ struct VramDmaInfo {
 	current_row: u16,
 	current_col: u16,
 
-	halfwords_left: u16
+	halfwords_left: u32
 }
 
 // set by GP0 $E1, some fields are set by textured cmds
@@ -869,7 +869,7 @@ impl Gpu {
 				self.vram_copy();
 
 				GP0State::WaitingForNextCmd
-			}
+			},
 			DrawCommand::DrawRect(cmd) => {
 				trace!("draw rect");
 				self.draw_rect(cmd);
@@ -923,9 +923,10 @@ impl Gpu {
 			height = 512;
 		}
 
-		//let extra_halfword = (width * height) % 2 != 0;
+		let halfwords = u32::from(width) * u32::from(height);
+		let extra_halfword = (u32::from(width) * u32::from(height)) % 2 != 0;
 
-		trace!("init dma dest: ({dest_x}, {dest_y}) size: ({width}, {height}) halfwords: {}", width * height);
+		trace!("init dma dest: ({dest_x}, {dest_y}) size: ({width}, {height}) halfwords: 0x{:X}", width * height);
 
 		VramDmaInfo {
 			dest_x,
@@ -934,7 +935,7 @@ impl Gpu {
 			height,
 			current_row: 0,
 			current_col: 0,
-			halfwords_left: (width * height)// + u16::from(extra_halfword),
+			halfwords_left: halfwords + u32::from(extra_halfword),
 		}
 	}
 
