@@ -5,6 +5,7 @@ use crate::cdrom::Cdrom;
 use crate::gpu::Gpu;
 use crate::dma::DmaController;
 use crate::interrupts::Interrupts;
+use crate::mdec::Mdec;
 use crate::scheduler::Scheduler;
 use crate::sio0::Sio0;
 use crate::spu::Spu;
@@ -85,6 +86,7 @@ pub struct Bus {
 	pub timers: Timers,
 	pub sio0: Sio0,
 	pub spu: Spu,
+	pub mdec: Mdec,
 
 	pub read_breakpoints: Vec<u32>,
 	pub write_breakpoints: Vec<u32>,
@@ -99,7 +101,7 @@ impl Bus {
 	pub fn new(bios: Vec<u8>) -> Self {
 		Self {
 			bios: bios,
-			ram: vec![0xFA; 2048 * 1024],
+			ram: vec![0xDE; 2048 * 1024],
 			scratchpad: vec![0xBA; 1024],
 
 			gpu: Gpu::new(),
@@ -109,6 +111,7 @@ impl Bus {
 			timers: Timers::new(),
 			sio0: Sio0::new(),
 			spu: Spu::new(),
+			mdec: Mdec::new(),
 
 			read_breakpoints: Vec::new(),
 			write_breakpoints: Vec::new(),
@@ -192,7 +195,7 @@ impl Bus {
 			IRQ_START			..= IRQ_END => self.interrupts.read32(addr),
 			TIMERS_START		..= TIMERS_END => self.timers.read32(addr, scheduler),
 			SPU_START			..= SPU_END => self.spu.read32(addr),
-			MDEC_START			..= MDEC_END => { warn!("[{addr:X}] Unhandled read to MDEC"); 0 },
+			MDEC_START			..= MDEC_END => self.mdec.read32(addr),
 
 			_ => u32::from_le_bytes([
 				self.read8(addr, scheduler),
@@ -351,7 +354,7 @@ impl Bus {
 			},
 			GPU_START			..= GPU_END => self.gpu.write32(addr, write),
 			SPU_START			..= SPU_END => self.spu.write32(addr, write),
-			MDEC_START			..= MDEC_END => warn!("[0x{addr:X}] Unhandled write to MDEC 0x{write:X}"),
+			MDEC_START			..= MDEC_END => self.mdec.write32(addr, write),
 			REDUX_START			..= REDUX_END => {},
 
 			_ => panic!("unhandled write32 [0x{:X}/0x{:X}] 0x{:X}", addr, unmasked_addr, write)

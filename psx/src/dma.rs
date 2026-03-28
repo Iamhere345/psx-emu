@@ -105,15 +105,7 @@ impl Channel {
 				self.block_size = write & 0xFFFF;
 				self.block_amount = (write >> 16) & 0xFFFF;
 
-				if self.block_size == 0 {
-					self.block_size = 0x10000;
-				}
-
-				if self.block_amount == 0 {
-					self.block_amount = 0x10000;
-				}
-
-				trace!("[DMA{}] block size: 0x{:X} block amount: 0x{:X}", self.channel_num, self.block_size, self.block_amount);
+				trace!("[DMA{}][0x{write:X}] block size: 0x{:X} block amount: 0x{:X}", self.channel_num, self.block_size, self.block_amount);
 			},
 			// channel control register
 			2 => {				
@@ -527,7 +519,8 @@ impl Bus {
 		let mut addr = channel.base_addr;
 		let words_left = match channel.sync_mode {
 			SyncMode::Burst => channel.block_size,
-			SyncMode::Slice => channel.block_size * channel.block_amount,
+			// TODO handle this properly
+			SyncMode::Slice => channel.block_size * (if channel.block_amount == 0 { 1 } else { channel.block_amount }),
 			SyncMode::LinkedList => unimplemented!()
 		};
 
@@ -538,7 +531,8 @@ impl Bus {
 			trace!("GPU {:?} (0x{:X} * 0x{:X}) words left: 0x{words_left:X} (writing 0x{:X} halfwords)", channel.sync_mode, channel.block_size, channel.block_amount, words_left * 2);
 		}
 
-		trace!("doing DMA{channel_num} start: 0x{addr:X} words: 0x{words_left:X}");
+		trace!("doing DMA{channel_num} {:?} start: 0x{addr:X} words: 0x{words_left:X}", channel.sync_mode);
+		trace!("{} * {}", channel.block_size, channel.block_amount);
 
 		for _ in 0..words_left {
 
@@ -556,7 +550,7 @@ impl Bus {
 							self.spu.write_sram((word >> 16) as u16);
 						},
 						CHANNEL_MDECIN => {
-							// stubbed
+							self.mdec.write32(0x1F801820, word);
 						},
 						_ => todo!("FromRam DMA{channel_num}")
 					}
@@ -581,8 +575,7 @@ impl Bus {
 							u32::from_le_bytes(data)
 						},
 						CHANNEL_MDECOUT => {
-							// stubbed
-							0xFF
+							self.mdec.read32(0x1F801820)
 						},
 						CHANNEL_SPU => {
 							u32::from(self.spu.read_sram())

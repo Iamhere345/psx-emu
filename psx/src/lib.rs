@@ -12,6 +12,7 @@ mod timers;
 pub mod sio0;
 mod kernel;
 mod spu;
+mod mdec;
 mod scheduler;
 pub mod bus;
 
