@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, mem};
+use std::{collections::VecDeque, mem, usize};
 use log::*;
 
 const ZAGZIG: [usize; 64] = [
@@ -15,7 +15,7 @@ const ZAGZIG: [usize; 64] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CmdState {
 	WaitingForNextCmd,
-	WaitingForParams { cmd: MdecCmd, index: usize, words_left: u16 },
+	WaitingForParams { cmd: MdecCmd, words_left: u16 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,8 +49,8 @@ impl OutputDepth {
 
 pub struct Mdec {
 	cmd_state: CmdState,
-	cmd_params: Vec<u16>,
 
+	input_fifo: VecDeque<u16>,
 	output_fifo: VecDeque<u8>,
 
 	output_depth: OutputDepth,
@@ -74,8 +74,8 @@ impl Mdec {
 	pub fn new() -> Self {
 		Self {
 			cmd_state: CmdState::WaitingForNextCmd,
-			cmd_params: Vec::new(),
 
+			input_fifo: VecDeque::new(),
 			output_fifo: VecDeque::new(),
 
 			output_depth: OutputDepth::BPP4,
@@ -101,10 +101,9 @@ impl Mdec {
 				let mut bytes = [0; 4];
 				for byte in &mut bytes  {
 					*byte = self.output_fifo.pop_front().unwrap_or(0xAA);
-					debug!("output fifo bytes left: {}", self.output_fifo.len());
 				}
 
-				debug!("read output: 0x{:X}", u32::from_le_bytes(bytes));
+				trace!("read output: 0x{:X}", u32::from_le_bytes(bytes));
 
 				u32::from_le_bytes(bytes)
 			},
@@ -126,7 +125,7 @@ impl Mdec {
 	fn read_stat(&self) -> u32 {
 		let words_left: u32 = match self.cmd_state {
 			CmdState::WaitingForNextCmd => 0xFFFF,
-			CmdState::WaitingForParams { cmd, index: _, words_left } => {
+			CmdState::WaitingForParams { cmd, words_left } => {
 				if cmd == MdecCmd::Nop {
 					words_left as u32
 				} else {
@@ -159,7 +158,7 @@ impl Mdec {
 			self.output_signed = false;
 			self.output_depth = OutputDepth::BPP4;
 
-			self.cmd_params.clear();
+			self.input_fifo.clear();
 		}
 	}
 
@@ -173,9 +172,9 @@ impl Mdec {
 						self.output_signed = ((write >> 26) & 1) != 0;
 						self.output_bit15 = ((write >> 25) & 1) != 0;
 
-						debug!("DecodeMacroblock depth: {:?} signed: {} bit15: {}", self.output_depth, self.output_signed, self.output_bit15);
+						debug!("DecodeMacroblock depth: {:?} signed: {} bit15: {} len: {} halfwords", self.output_depth, self.output_signed, self.output_bit15, (write & 0xFFFF) * 2);
 
-						CmdState::WaitingForParams { cmd: MdecCmd::DecodeMacroblock, index: 0, words_left: (write & 0xFFFF) as u16 }
+						CmdState::WaitingForParams { cmd: MdecCmd::DecodeMacroblock, words_left: (write & 0xFFFF) as u16 }
 					},
 					// Set Quant Table
 					2 => {
@@ -191,7 +190,7 @@ impl Mdec {
 
 						debug!("SetQuant (colour table: {recv_colour_table} words left: {words_left})");
 
-						CmdState::WaitingForParams { cmd: MdecCmd::SetQuant(recv_colour_table), index: 0, words_left: words_left }
+						CmdState::WaitingForParams { cmd: MdecCmd::SetQuant(recv_colour_table), words_left: words_left }
 					},
 					// Set Scale Table
 					3 => {
@@ -202,27 +201,27 @@ impl Mdec {
 						self.output_signed = ((write >> 26) & 1) != 0;
 						self.output_bit15 = ((write >> 25) & 1) != 0;
 
-						CmdState::WaitingForParams { cmd: MdecCmd::SetScale, index: 0, words_left: 64 / 2 }
+						CmdState::WaitingForParams { cmd: MdecCmd::SetScale, words_left: 64 / 2 }
 					},
 					_ => unimplemented!("MDEC cmd {}", write >> 29)
 				}
 			},
-			CmdState::WaitingForParams { cmd, index, words_left } => {
-				if index == 0 {
-					self.cmd_params = vec![0; words_left as usize * 2];
-				}
+			CmdState::WaitingForParams { cmd, words_left } => {
 
-				self.cmd_params[index] = write as u16;
-				self.cmd_params[index + 1] = (write >> 16) as u16;
+				self.input_fifo.push_back(write as u16);
+				self.input_fifo.push_back((write >> 16) as u16);
 
-				trace!("[{cmd:?}] write param 0x{write:X} (words left: {words_left} index: {index})");
+				trace!("[{cmd:?}] write param 0x{write:X} (words left: {words_left}");
 
 				if words_left == 1 {
 					trace!("Exec cmd {cmd:?}");
+
 					self.exec_cmd(cmd);
+					self.input_fifo.clear();
+
 					CmdState::WaitingForNextCmd
 				} else {
-					CmdState::WaitingForParams { cmd: cmd, index: index + 2, words_left: words_left - 1 }
+					CmdState::WaitingForParams { cmd: cmd, words_left: words_left - 1 }
 				}
 			}
 		}
@@ -240,12 +239,14 @@ impl Mdec {
 	
 	fn set_quant_table(&mut self, recv_colour_table: bool) {
 		for i in 0..64 / 2 {
-			self.luminance_quant_table[2 * i..2 * (i + 1)].copy_from_slice(&self.cmd_params[i].to_le_bytes());
+			let halfword = self.input_fifo.pop_front().expect("luminance table halfwords");
+			self.luminance_quant_table[2 * i..2 * (i + 1)].copy_from_slice(&halfword.to_le_bytes());
 		}
 		
 		if recv_colour_table {
 			for i in 0..64 / 2 {
-				self.colour_quant_table[2 * i..2 * (i + 1)].copy_from_slice(&self.cmd_params[i + (32 / 2)].to_le_bytes());
+				let halfword = self.input_fifo.pop_front().expect("colour table halfwords");
+				self.colour_quant_table[2 * i..2 * (i + 1)].copy_from_slice(&halfword.to_le_bytes());
 			}
 		}
 
@@ -254,8 +255,8 @@ impl Mdec {
 	}
 	
 	fn set_scale_table(&mut self) {
-		for i in 0..64 {
-			self.scale_table[i] = self.cmd_params[i] as i16;
+		for (i, &halfword) in self.input_fifo.iter().enumerate() {
+			self.scale_table[i] =  halfword as i16;
 		}
 
 		trace!("set scale table: {:X?}", self.scale_table)
@@ -271,7 +272,7 @@ impl Mdec {
 	fn decode_monochrome_macroblock(&mut self) {
 		self.output_fifo.clear();
 
-		decode_block(&mut self.cmd_params, 0, &mut self.y_block, &self.luminance_quant_table, &self.scale_table);
+		decode_block(&mut self.input_fifo, &mut self.y_block, &self.luminance_quant_table, &self.scale_table);
 
 		// y_to_mono
 		let mut mono_out = [0; 64];
@@ -308,22 +309,122 @@ impl Mdec {
 	}
 
 	fn decode_colour_macroblock(&mut self) {
-		todo!()
+		let mut count = 0;
+
+		loop {
+			// Cr
+			if !decode_block(&mut self.input_fifo, &mut self.cr_block, &self.colour_quant_table, &self.scale_table) {
+				break;
+			}
+
+			// Cb
+			decode_block(&mut self.input_fifo, &mut self.cb_block, &self.colour_quant_table, &self.scale_table);
+
+			let mut colour_out = [0; 0x300];
+
+			// Y1
+			decode_block(&mut self.input_fifo, &mut self.y_block, &self.luminance_quant_table, &self.scale_table);
+			self.yuv_to_rgb(0, 0, &mut colour_out);
+			// Y2
+			decode_block(&mut self.input_fifo, &mut self.y_block, &self.luminance_quant_table, &self.scale_table);
+			self.yuv_to_rgb(8, 0, &mut colour_out);
+			// Y3
+			decode_block(&mut self.input_fifo, &mut self.y_block, &self.luminance_quant_table, &self.scale_table);
+			self.yuv_to_rgb(0, 8, &mut colour_out);
+			// Y4
+			decode_block(&mut self.input_fifo, &mut self.y_block, &self.luminance_quant_table, &self.scale_table);
+			self.yuv_to_rgb(8, 8, &mut colour_out);
+			
+			// push 16x16 output to fifo
+			match self.output_depth {
+				OutputDepth::BPP15 => {
+					for y in 0..16 {
+						for x in 0..16 {
+							let rgb555_addr = (16 * y + x) * 2;
+
+							for i in rgb555_addr ..= rgb555_addr + 1 {
+								self.output_fifo.push_back(colour_out[i]);
+							}
+						}
+					}
+				},
+				OutputDepth::BPP24 => {
+					for y in 0..16 {
+						for x in 0..16 {
+							let rgb888_addr = (16 * y + x) * 3;
+
+							for i in rgb888_addr ..= rgb888_addr + 2 {
+								self.output_fifo.push_back(colour_out[i]);
+							}
+						}
+					}
+				},
+				_ => unreachable!(),
+			}
+
+			count += 1;
+		}
+
+		debug!("finished decode macroblocks: {count}");
+	}
+
+	fn yuv_to_rgb(&mut self, xx: usize, yy: usize, colour_out: &mut [u8; 0x300]) {
+		for y in 0..8 {
+			for x in 0..8 {
+				let mut r = self.cr_block[(((x + xx) / 2) + ((y + yy) / 2) * 8) as usize];
+				let mut b = self.cb_block[(((x + xx) / 2) + ((y + yy) / 2) * 8) as usize];
+
+				let g = (-0.3437 * f64::from(b) - 0.7143 * f64::from(r)).round() as i32;
+				r = (1.402 * f64::from(r)).round() as i32;
+				b = (1.772 * f64::from(b)).round() as i32;
+
+				let l = self.y_block[(x + y * 8) as usize];
+				let mut r = (l + r).clamp(-128, 127) as i16;
+				let mut g = (l + g).clamp(-128, 127) as i16;
+				let mut b = (l + b).clamp(-128, 127) as i16;
+
+				if !self.output_signed {
+					r += 128;
+					g += 128;
+					b += 128;
+				}
+
+				match self.output_depth {
+					OutputDepth::BPP24 => {
+						colour_out[(0 + ((x + xx) + (y + yy) * 16) * 3) as usize] = r as u8;
+						colour_out[(1 + ((x + xx) + (y + yy) * 16) * 3) as usize] = g as u8;
+						colour_out[(2 + ((x + xx) + (y + yy) * 16) * 3) as usize] = b as u8;
+					},
+					OutputDepth::BPP15 => {
+						let r5 = (r as u8) >> 3;
+						let g5 = (g as u8) >> 3;
+						let b5 = (b as u8) >> 3;
+
+						let mut rgb = ((b5 as u16) << 10) | ((g5 as u16) << 5) | (r5 as u16);
+						if self.output_bit15 {
+							rgb |= 0x8000;
+						}
+
+						colour_out[(0 + ((x + xx) + (y + yy) * 16) * 2) as usize] = rgb as u8;
+						colour_out[(1 + ((x + xx) + (y + yy) * 16) * 2) as usize] = (rgb >> 8) as u8;
+					},
+					_ => unreachable!(),
+				}
+			}
+		}
 	}
 
 }
 
-fn decode_block(src: &mut Vec<u16>, mut src_index: usize, block: &mut [i32; 64], quant_table: &[u8; 64], scale_table: &[i16; 64]) -> usize {
+fn decode_block(src: &mut VecDeque<u16>, block: &mut [i32; 64], quant_table: &[u8; 64], scale_table: &[i16; 64]) -> bool {
 	block.fill(0);
 
-	let mut n = src[src_index];
-
-	src_index += 1;
-
-	if n == 0xFE00 {
-		n = src[src_index];
-		src_index += 1;
+	while src.front().copied() == Some(0xFE00) {
+		debug!("Skip padding");
+		src.pop_front();
 	}
+
+	let Some(mut n) = src.pop_front() else { return false };
 
 	let quant_scale = n >> 10;
 	
@@ -348,8 +449,7 @@ fn decode_block(src: &mut Vec<u16>, mut src_index: usize, block: &mut [i32; 64],
 			break;
 		}
 
-		n = src[src_index];
-		src_index += 1;
+		n = src.pop_front().unwrap_or(0xFE00);
 
 		k += (n >> 10) + 1;
 
@@ -362,9 +462,7 @@ fn decode_block(src: &mut Vec<u16>, mut src_index: usize, block: &mut [i32; 64],
 
 	idct_core(block, scale_table);
 
-	debug!("New index: {src_index}");
-
-	return src_index;
+	return true;
 }
 
 fn idct_core(block: &mut [i32; 64], scale_table: &[i16; 64]) {
