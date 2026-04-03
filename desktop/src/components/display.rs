@@ -27,20 +27,49 @@ impl DisplayViwer {
 		let (width, height) = psx.get_display_res();
 		let (start_x, start_y) = psx.get_display_start();
 
-		let vram = psx.get_vram();
 		let mut display_buf = vec![Color32::default(); width * height];
 
-		for y in start_y..(start_y + height) {
-			for x in start_x..(start_x + width) {
-				let vram_addr = 1024 * y + x;
-				let pixel = vram[vram_addr];
+		let vram = psx.get_vram();
 
-				display_buf[(x - start_x) + width * (y - start_y)] = Color32::from_rgb(
-					convert_5bit_to_8bit((pixel >> 0) & 0x1F),
-					convert_5bit_to_8bit((pixel >> 5) & 0x1F),
-					convert_5bit_to_8bit((pixel >> 10) & 0x1F),
-				)
+		if psx.is_display_24bit() {			
+			for y in start_y..(start_y + height) {
+				for x in start_x..(start_x + width) {
+					let vram_addr = 1024 * y + x * 3 / 2;
+					
+					let first_halfword = vram[vram_addr];
+					let second_halfword = vram[vram_addr + 1];
 
+					let output_pixel = if (x - start_x).is_multiple_of(2) {
+						Color32::from_rgb(
+							first_halfword as u8,
+							(first_halfword >> 8) as u8,
+							second_halfword as u8,
+						)
+					} else {
+						Color32::from_rgb(
+							(first_halfword >> 8) as u8,
+							second_halfword as u8,
+							(second_halfword >> 8) as u8,
+						)
+					};
+
+					display_buf[(x - start_x) + width * (y - start_y)] = output_pixel;
+
+				}
+			}
+		} else {
+			for y in start_y..(start_y + height) {
+				for x in start_x..(start_x + width) {
+					let vram_addr = 1024 * y + x;
+					let pixel = vram[vram_addr];
+
+					display_buf[(x - start_x) + width * (y - start_y)] = Color32::from_rgb(
+						convert_5bit_to_8bit((pixel >> 0) & 0x1F),
+						convert_5bit_to_8bit((pixel >> 5) & 0x1F),
+						convert_5bit_to_8bit((pixel >> 10) & 0x1F),
+					)
+
+				}
 			}
 		}
 

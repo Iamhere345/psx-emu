@@ -141,7 +141,7 @@ impl VideoMode {
 	}
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ColourDepth {
 	FiveteenBit = 0,
 	TwentyFourBit = 1,
@@ -818,6 +818,14 @@ impl Gpu {
 		};
 
 		(width, height)
+	}
+
+	pub fn is_display_24bit(&self) -> bool {
+		if self.display_colour_depth == ColourDepth::TwentyFourBit {
+			true
+		} else {
+			false
+		}
 	}
 
 	pub fn get_display_start(&self) -> (usize, usize) {

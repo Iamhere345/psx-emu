@@ -111,6 +111,10 @@ impl PSXEmulator {
 		self.bus.gpu.get_display_res()
 	}
 
+	pub fn is_display_24bit(&self) -> bool {
+		self.bus.gpu.is_display_24bit()
+	}
+
 	pub fn get_display_start(&self) -> (usize, usize) {
 		self.bus.gpu.get_display_start()
 	}
