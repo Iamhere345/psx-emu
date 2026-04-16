@@ -142,7 +142,7 @@ impl Mdec {
 			| (self.dma1_enable as u32) << 27 // Data-Out Request (set when DMA1 enabled and ready to send data)
 			| (self.dma0_enable as u32) << 28 // Data-In Request  (set when DMA0 enabled and ready to receive data)
 			| (matches!(self.cmd_state, CmdState::WaitingForParams { .. }) as u32) << 29 // Command Busy  (0=Ready, 1=Busy receiving or processing parameters)
-			| (!self.output_fifo.is_empty() as u32) << 30 // Data-In Fifo Full (0=No, 1=Full, or Last word received)
+			| (!matches!(self.cmd_state, CmdState::WaitingForParams { .. }) as u32) << 30 // Data-In Fifo Full (0=No, 1=Full, or Last word received)
 			| (self.output_fifo.is_empty() as u32) << 31 // Data-Out Fifo Empty (0=No, 1=Empty)
 	}
 
@@ -420,7 +420,7 @@ fn decode_block(src: &mut VecDeque<u16>, block: &mut [i32; 64], quant_table: &[u
 	block.fill(0);
 
 	while src.front().copied() == Some(0xFE00) {
-		debug!("Skip padding");
+		trace!("Skip padding");
 		src.pop_front();
 	}
 

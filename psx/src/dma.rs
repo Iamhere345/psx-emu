@@ -15,7 +15,7 @@ const CHANNEL_OTC: usize = 6;
 const CDROM_CLKS: u64 = 40;
 const AVG_CLKS: u64 = 1;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SyncMode {
 	// transfer data all at once after DREQ is first asserted
 	#[default]
@@ -272,7 +272,7 @@ impl DmaInterruptRegister {
 
 		trace!("{} && !{}", self.master_flag, old_master_int);
 
-		if self.master_flag {
+		if self.master_flag && !old_master_int {
 			trace!("DMA{flag} raise int");
 			interrupts.raise_interrupt(crate::interrupts::InterruptFlag::Dma);
 		}
@@ -373,7 +373,7 @@ impl DmaController {
 	}
 
 	pub fn write8(&mut self, addr: u32, write: u8) {
-		debug!("[0x{addr:X}] DMA write8 0x{write:X}");
+		trace!("[0x{addr:X}] DMA write8 0x{write:X}");
 
 		match addr & 0xFF {
 			// DPCR
@@ -419,6 +419,8 @@ impl Bus {
 
 		let dma_clks = match channel {
 			CHANNEL_CDROM => CDROM_CLKS,
+			CHANNEL_MDECIN => 1,
+			CHANNEL_MDECOUT => 17,
 			_ => AVG_CLKS
 		};
 
@@ -467,6 +469,7 @@ impl Bus {
 
 		self.dma.channels[channel_num].transfer_active = false;
 		self.dma.channels[channel_num].manual_trigger = false;
+		self.dma.channels[channel_num].base_addr = addr;
 
 		words_sent
 
@@ -529,6 +532,12 @@ impl Bus {
 		}
 		if channel_num == CHANNEL_GPU {
 			trace!("GPU {:?} (0x{:X} * 0x{:X}) words left: 0x{words_left:X} (writing 0x{:X} halfwords)", channel.sync_mode, channel.block_size, channel.block_amount, words_left * 2);
+		}
+		if channel_num == CHANNEL_MDECIN {
+			trace!("MDECIN {:?} (0x{:X} * 0x{:X}) words left: 0x{words_left:X} (writing 0x{:X} halfwords)", channel.sync_mode, channel.block_size, channel.block_amount, words_left * 2);
+		}
+		if channel_num == CHANNEL_MDECOUT {
+			trace!("MDECOUT {:?} (0x{:X} * 0x{:X}) words left: 0x{words_left:X} (writing 0x{:X} halfwords)", channel.sync_mode, channel.block_size, channel.block_amount, words_left * 2);
 		}
 
 		trace!("doing DMA{channel_num} {:?} start: 0x{addr:X} words: 0x{words_left:X}", channel.sync_mode);
@@ -596,6 +605,11 @@ impl Bus {
 
 		self.dma.channels[channel_num].transfer_active = false;
 		self.dma.channels[channel_num].manual_trigger = false;
+		self.dma.channels[channel_num].base_addr = addr;
+		
+		if channel.sync_mode == SyncMode::Slice {
+			self.dma.channels[channel_num].block_amount = 0;
+		}
 
 		words_left as u64
 
