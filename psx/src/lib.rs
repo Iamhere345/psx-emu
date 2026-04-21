@@ -131,6 +131,14 @@ impl PSXEmulator {
 		old_buf
 	}
 
+	pub fn get_rumble(&self) -> (u8, u8) {
+		self.bus.sio0.controller_state.get_rumble()
+	}
+
+	pub fn is_analog_locked(&self) -> bool {
+		self.bus.sio0.controller_state.analog_locked
+	}
+
 	// from https://jsgroth.dev/blog/posts/ps1-sideloading/
 	pub fn sideload_exe(&mut self, exe: Vec<u8>) {
 

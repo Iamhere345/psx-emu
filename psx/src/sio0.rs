@@ -63,11 +63,30 @@ pub struct InputState {
 pub struct ControllerState {
 	input_state: InputState,
 	analog_enabled: bool,
+
+	config_mode: bool,
+	command: u8,
+	pub analog_locked: bool,
+
+	enter_config_mode: bool,
+
+	rumble_indexes: [u8; 6],
+	old_rumble_indexes: [u8; 6],
+
+	rumble_m1: u8,
+	rumble_m2: u8,
+
+	variable_response_ii: u8,
 }
 
 impl ControllerState {
 	fn new() -> Self {
-		Self::default()
+		Self {
+			rumble_indexes: [0xFF; 6],
+			old_rumble_indexes: [0xFF; 6],
+
+			..Default::default()
+		}
 	}
 
 	fn digital_switches_low(&self) -> u8 {
@@ -103,10 +122,16 @@ impl ControllerState {
 	}
 
 	pub fn set_analog_enabled(&mut self, set: bool) {
-		self.analog_enabled = set;
+		if !self.analog_locked {
+			self.analog_enabled = set;
+		}
 	}
 
-	pub fn tx_reply(&self, index: u8) -> (u8, bool) {
+	pub fn get_rumble(&self) -> (u8, u8) {
+		(self.rumble_m1, self.rumble_m2)
+	}
+
+	pub fn _tx_reply(&self, index: u8) -> (u8, bool) {
 		if self.analog_enabled {
 			let reply = match index {
 				0 => 0x73,
@@ -131,6 +156,231 @@ impl ControllerState {
 			};
 
 			return (reply, index < 3);
+		}
+	}
+
+	pub fn tx_reply(&mut self, index: u8, tx: u8) -> (u8, bool) {
+		if index == 0 {
+			self.command = tx;
+
+			let id_low = if self.config_mode {
+				0xF3
+			} else if self.analog_enabled {
+				0x73
+			} else {
+				0x41
+			};
+
+			trace!("IDLO: 0x{id_low:X}");
+
+			return (id_low, true);
+		} else if index == 1 {
+			return (0x5A, true);
+		}
+
+		if self.config_mode {
+			match self.command {
+				// Same as normal mode but always returns analog inputs
+				0x42 => {
+					self.update_rumble(index, tx);
+
+					let old_analog = self.analog_enabled;
+					self.analog_enabled = true;
+
+					let (reply, ack) = self.normal_mode(index);
+					self.analog_enabled = old_analog;
+
+					(reply, ack)
+				},
+				0x43 => self.change_config_mode(index, tx),
+				0x44 => self.set_led_state(index, tx),
+				0x45 => self.get_led_state(index),
+				0x46 => self.variable_response_a(index, tx),
+				0x47 => self.unknown_response(index),
+				0x4C => self.variable_response_b(index, tx),
+				0x4D => self.rumble_protocol(index, tx),
+				_ => (0, index < 7),
+			}
+		} else {
+			match self.command {
+				0x42 => {
+					if self.analog_enabled {
+						self.update_rumble(index, tx);
+					}
+					self.normal_mode(index)
+				},
+				0x43 if self.analog_enabled => self.change_config_mode(index, tx),
+				_ => (0, index < 7),
+			}
+		}
+	}
+
+	fn normal_mode(&self, index: u8) -> (u8, bool) {
+		if self.analog_enabled {
+			let reply = match index {
+				2 => self.digital_switches_low(),
+				3 => self.digital_switches_high(),
+				4 => self.input_state.r_stick_x,
+				5 => self.input_state.r_stick_y,
+				6 => self.input_state.l_stick_x,
+				7 => self.input_state.l_stick_y,
+				_ => 0,
+			};
+
+			trace!("analog reply: 0x{reply:X}");
+
+			return (reply, index < 7);
+		} else {
+			let reply = match index {
+				2 => self.digital_switches_low(),
+				3 => self.digital_switches_high(),
+				_ => 0,
+			};
+
+			trace!("digital reply: 0x{reply:X}");
+
+			return (reply, index < 3);
+		}
+	}
+
+	fn change_config_mode(&mut self, index: u8, tx: u8) -> (u8, bool) {
+		if index == 2 {
+			self.enter_config_mode = tx == 1;
+		}
+
+		let (reply, ack) = if self.config_mode { (0, index < 7) } else { self.normal_mode(index) };
+
+		if index == 7 {
+			self.config_mode = self.enter_config_mode;
+		}
+
+		debug!("new config mode: {}", self.config_mode);
+
+		(reply, ack)
+	}
+
+	fn set_led_state(&mut self, index: u8, tx: u8) -> (u8, bool) {
+		match index {
+			// Led
+			3 => {
+				if tx == 0 {
+					self.analog_enabled = false;
+				} else if tx == 1 {
+					self.analog_enabled = true;
+				};
+			},
+			// Key
+			4 => {
+				if (tx & 3) == 3 {
+					self.analog_locked = true;
+				} else {
+					self.analog_locked = false;
+				};
+			}
+			_ => {},
+		}
+
+		(0, index < 7)
+	}
+
+	fn get_led_state(&self, index: u8) -> (u8, bool) {
+		let reply = match index {
+			2 => 0x1,
+			3 => 0x2,
+			4 => u8::from(self.analog_enabled),
+			5 => 0x2,
+			6 => 0x1,
+			7 => 0x0,
+			_ => 0x0,
+		};
+
+		(reply, index < 7)
+	}
+
+	fn variable_response_a(&mut self, index: u8, tx: u8) -> (u8, bool) {
+		if index == 2 {
+			self.variable_response_ii = tx;
+		}
+
+		let reply = if self.variable_response_ii == 0 {
+			match index {
+				3 => 0x0,
+				4 => 0x1,
+				5 => 0x2,
+				6 => 0x0,
+				7 => 0xA,
+				_ => 0,
+			}
+		} else if self.variable_response_ii == 1 {
+			match index {
+				3 => 0x00,
+				4 => 0x01,
+				5 => 0x01,
+				6 => 0x01,
+				7 => 0x14,
+				_ => 0,
+			}
+		} else {
+			0
+		};
+
+		(reply, index < 7)
+	}
+
+	fn variable_response_b(&mut self, index: u8, tx: u8) -> (u8, bool) {
+		if index == 2 {
+			self.variable_response_ii = tx;
+		}
+
+		let reply = if self.variable_response_ii == 0 && index == 5 {
+			0x04
+		} else if self.variable_response_ii == 1 && index == 5 {
+			0x07
+		} else {
+			0
+		};
+
+		(reply, index < 7)
+	}
+
+	fn unknown_response(&self, index: u8) -> (u8, bool) {
+		let reply = match index {
+			2 => 0x0,
+			3 => 0x0,
+			4 => 0x2,
+			5 => 0x0,
+			6 => 0x1,
+			7 => 0x0,
+			_ => 0x0,
+		};
+
+		(reply, index < 7)
+	}
+
+	fn rumble_protocol(&mut self, index: u8, tx: u8) -> (u8, bool) {
+		self.rumble_m1 = 0;
+		self.rumble_m2 = 0;
+
+		self.rumble_indexes[(index - 2) as usize] = tx;
+
+		let old_index = self.old_rumble_indexes[(index - 2) as usize];
+		if index == 7 {
+			self.old_rumble_indexes = self.rumble_indexes;
+		}
+
+		(old_index, index < 7)
+	}
+
+	fn update_rumble(&mut self, index: u8, tx: u8) {
+		if self.rumble_indexes[(index - 2) as usize] == 0 {
+			trace!("rumble M2: 0x{tx:X}");
+
+			// the weak motor is only 0/1
+			self.rumble_m2 = (tx & 1) * 0xFF;
+		} else if self.rumble_indexes[(index - 2) as usize] == 1 {
+			trace!("rumble M1: 0x{tx:X}");
+
+			self.rumble_m1 = tx;
 		}
 	}
 }
@@ -294,7 +544,6 @@ impl Sio0 {
 			},
 			TxState::Ready => {
 				if write as usize == CONTROLLER_ADDR {
-					
 					// port 2 is stubbed
 					if self.port_select {
 						//trace!("communication aborted (ps: {} cs: {})", self.port_select, self.cs);
@@ -319,13 +568,13 @@ impl Sio0 {
 			},
 			TxState::Transfering { index } => {
 				// TODO for now always assuming the device is a controller
-				if index == 0 && write != 0x42 {
+				if index == 0 && !self.controller_state.analog_enabled && write != 0x42 {
 					// invalid command, abort transfer
 					error!("abort transfer 0x{write:X}");
 					self.push_rx(scheduler, 0xFF, false);
 					TxState::Ready
 				} else {
-					let (reply, should_int) = self.controller_state.tx_reply(index);
+					let (reply, should_int) = self.controller_state.tx_reply(index, write);
 
 					trace!("write 0x{write:X} controller reply 0x{reply:X} (index: {index}) (int: {should_int})");
 

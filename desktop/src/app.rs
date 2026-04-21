@@ -83,7 +83,7 @@ impl App for Desktop {
 
 				ui.separator();
 
-				self.context.input.show_settings(ui);
+				self.context.input.show_settings(ui, &self.context.psx);
 			});
 		});
 
@@ -174,6 +174,7 @@ impl FrontendState {
 
 		if !self.control.paused && !self.psx.breakpoint_hit {
 			self.psx.run_frame();
+			self.input.handle_rumble(&self.psx);
 
 			if self.psx.breakpoint_hit {
 				self.control.paused = true;

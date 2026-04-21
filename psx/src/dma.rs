@@ -272,7 +272,7 @@ impl DmaInterruptRegister {
 
 		trace!("{} && !{}", self.master_flag, old_master_int);
 
-		if self.master_flag && !old_master_int {
+		if self.master_flag {
 			trace!("DMA{flag} raise int");
 			interrupts.raise_interrupt(crate::interrupts::InterruptFlag::Dma);
 		}
@@ -419,8 +419,6 @@ impl Bus {
 
 		let dma_clks = match channel {
 			CHANNEL_CDROM => CDROM_CLKS,
-			CHANNEL_MDECIN => 1,
-			CHANNEL_MDECOUT => 17,
 			_ => AVG_CLKS
 		};
 

@@ -1,4 +1,4 @@
-use eframe::{egui::*, CreationContext};
+use eframe::{CreationContext, egui::{load::SizedTexture, *}};
 
 const VRAM_WIDTH: usize = 1024;
 const VRAM_HEIGHT: usize = 512;
@@ -60,7 +60,7 @@ impl DisplayViwer {
 		} else {
 			for y in start_y..(start_y + height) {
 				for x in start_x..(start_x + width) {
-					let vram_addr = 1024 * y + x;
+					let vram_addr = (1024 * (y & 0x1FF)).wrapping_add(x & 0x3FF);
 					let pixel = vram[vram_addr];
 
 					display_buf[(x - start_x) + width * (y - start_y)] = Color32::from_rgb(
@@ -80,7 +80,12 @@ impl DisplayViwer {
 
 		self.display_tex.set(colour_image, TextureOptions::NEAREST);
 
-		let image = Image::new(&self.display_tex).maintain_aspect_ratio(true).shrink_to_fit();
+		let image = Image::from_texture(SizedTexture::new(
+			&self.display_tex, 
+			Vec2::new(640.0, 480.0)
+		))
+		.shrink_to_fit();
+
 		ui.centered_and_justified(|ui| {
 			ui.add(image);
 		});

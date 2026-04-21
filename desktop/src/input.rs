@@ -1,7 +1,9 @@
 use eframe::egui::{self, Context, Key, Ui};
 use gilrs::*;
+use gilrs::ff::{BaseEffect, Effect, EffectBuilder, Replay, Ticks};
+use log::*;
 
-use psx::sio0::InputState;
+use psx::{PSXEmulator, sio0::InputState};
 
 // hardcoding this because it seems to be a non-existent controller which always connects first on windows
 const EXCLUDED_CONTROLLER: &str = "HID-compliant game controller";
@@ -26,6 +28,8 @@ pub struct Input {
 	gilrs: Gilrs,
 
 	pub analog_enabled: bool,
+
+	current_effect: Option<Effect>
 }
 
 impl Input {
@@ -33,8 +37,10 @@ impl Input {
 		Self {
 			active_gamepad: None,
 			gilrs: Gilrs::new().unwrap(),
-
+			
 			analog_enabled: false,
+
+			current_effect: None,
 		}
 	}
 
@@ -141,7 +147,43 @@ impl Input {
 		0x80
 	}
 
-	pub fn show_settings(&mut self, ui: &mut Ui) {
+	pub fn handle_rumble(&mut self, psx: &PSXEmulator) {
+		let Some(gamepad) = self.active_gamepad else {
+			return;
+		};
+
+		let (strong_motor, weak_motor) = psx.get_rumble();
+
+		if strong_motor == 0 && weak_motor == 0 {
+			// effects stop when dropped
+			self.current_effect = None;
+		}
+
+		let rumble_ticks = Ticks::from_ms(16);
+
+		let effect = EffectBuilder::new()
+			.add_effect(BaseEffect {
+				kind: ff::BaseEffectType::Strong { magnitude: u16::from(strong_motor) * 0xFFFF },
+				scheduling: Replay { play_for: rumble_ticks, ..Default::default() },
+				..Default::default()
+			})
+			.repeat(ff::Repeat::For(rumble_ticks))
+			.add_effect(BaseEffect {
+				kind: ff::BaseEffectType::Weak { magnitude: u16::from(weak_motor) * 0xFF },
+				scheduling: Replay { play_for: rumble_ticks, ..Default::default() },
+				..Default::default()
+			})
+			.repeat(ff::Repeat::For(rumble_ticks))
+			.gamepads(&[gamepad])
+			.finish(&mut self.gilrs).unwrap();
+
+		effect.play().unwrap();
+		self.current_effect = Some(effect);
+
+		trace!("play rumble: M1: 0x{weak_motor:X} M2: 0x{strong_motor:X}");
+	}
+
+	pub fn show_settings(&mut self, ui: &mut Ui, psx: &PSXEmulator) {
 		let controllers: Vec<(GamepadId, Gamepad<'_>)> = self.gilrs.gamepads().filter(|(_, gamepad)| gamepad.name() != EXCLUDED_CONTROLLER).collect();
 
 		let mut selected_controller = "Keyboard".to_string();
@@ -161,6 +203,6 @@ impl Input {
 				ui.selectable_value(&mut self.active_gamepad, None, "keyboard")
 			});
 		
-		ui.checkbox(&mut self.analog_enabled, "Analog");
+		ui.add_enabled(!psx.is_analog_locked(), egui::Checkbox::new(&mut self.analog_enabled, "Analog"));
 	}
 }
