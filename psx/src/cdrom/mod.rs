@@ -8,6 +8,7 @@ use crate::{cdrom::disc::Sector, interrupts::{InterruptFlag, Interrupts}, schedu
 use self::commands::*;
 
 mod commands;
+mod xa_apdcm;
 pub mod disc;
 
 struct CdromInterrupts {
@@ -94,6 +95,14 @@ impl SectorSize {
 			false => Self::DataOnly,
 		}
 	}
+}
+
+#[derive(Default)]
+pub struct XaAdpcmInfo {
+	xa_enabled: bool,
+	xa_filter: bool,
+	xa_file: u8,
+	xa_channel: u8,
 }
 
 pub struct DataFifo {
@@ -229,6 +238,8 @@ pub struct Cdrom {
 	ignore_cur_sector_size: bool,
 	motor_on: bool,
 
+	xa_adpcm_info: XaAdpcmInfo,
+
 	audio_muted: bool,
 	pending_atv: [[u8; 2]; 2],
 	atv: [[u8; 2]; 2],
@@ -260,6 +271,8 @@ impl Cdrom {
 			last_sector_size: SectorSize::DataOnly,
 			ignore_cur_sector_size: false,
 			motor_on: true,
+
+			xa_adpcm_info: XaAdpcmInfo::default(),
 
 			audio_muted: false,
 			pending_atv: [[0x80; 2]; 2],
@@ -398,8 +411,8 @@ impl Cdrom {
 			0xB => self.mute(),
 			// Demute (stubbed)
 			0xC => self.demute(),
-			// Setfilter (stubbed)
-			0xD => (CmdResponse::int3_status(&self), AVG_CYCLES),
+			// Setfilter
+			0xD => self.set_filter(),
 			// Setmode
 			0xE => self.set_mode(),
 			// GetTN

@@ -253,6 +253,18 @@ impl Cdrom {
 		None
 	}
 
+	pub fn set_filter(&mut self) -> (CmdResponse, u64) {
+		if self.params_fifo.len() < 2 {
+			error!("SetFilter: invalid params");
+			return (CmdResponse::error(&self, ERROR_INVALID_PARAMS), AVG_CYCLES);
+		}
+
+		self.xa_adpcm_info.xa_file = self.params_fifo.pop_front().unwrap();
+		self.xa_adpcm_info.xa_channel = self.params_fifo.pop_front().unwrap();
+
+		(CmdResponse::int3_status(&self), AVG_CYCLES)
+	}
+
 	pub fn set_mode(&mut self) -> (CmdResponse, u64) {
 		if self.params_fifo.len() < 1 {
 			error!("SetMode: invalid params");
@@ -263,8 +275,10 @@ impl Cdrom {
 
 		let new_mode = self.params_fifo.pop_front().unwrap();
 		self.drive_speed = DriveSpeed::from_bits((new_mode >> 7) & 1 != 0);
+		self.xa_adpcm_info.xa_enabled = (new_mode >> 6) & 1 != 0;
 		self.sector_size = SectorSize::from_bits((new_mode >> 5) & 1 != 0);
 		self.ignore_cur_sector_size = (new_mode >> 4) & 1 != 0;
+		self.xa_adpcm_info.xa_filter = (new_mode >> 3) & 1 != 0;
 
 		debug!("SetMode 0b{new_mode:b} {:?} {:?} ignore bit: {}", self.drive_speed, self.sector_size, self.ignore_cur_sector_size);
 
@@ -318,8 +332,11 @@ impl Cdrom {
 			let sect_pos = CdIndex::from_bcd(raw_sector[0xC], raw_sector[0xD], raw_sector[0xE]);
 
 			debug!("ReadN sector: {} actual sector: {sect_pos}", self.current_seek + self.read_offset); */
-
-			self.data_fifo.read_sector(data);
+			if sector.is_xa_adpcm(&self.xa_adpcm_info) {
+				
+			} else {
+				self.data_fifo.read_sector(data);
+			}
 
 			self.read_offset = self.read_offset + CdIndex::new(0, 0, 1);
 

@@ -1,6 +1,8 @@
 use std::{fmt::Display, fs::File, io::Read, ops::{Add, Sub}, path::Path};
 use log::*;
 
+use crate::cdrom::XaAdpcmInfo;
+
 const SECONDS_PER_MINUTE: usize = 60;
 const SECTORS_PER_SECOND: usize = 75;
 pub const BYTES_PER_SECTOR: usize = 0x930;
@@ -196,6 +198,29 @@ impl Sector {
 
 	pub fn data_only(&self) -> &[u8] {
 		&self.data[0x18..0x18 + 0x800]
+	}
+
+	pub fn xa_audio(&self) -> &[u8] {
+		&self.data[0x18..0x18 + 0x914]
+	}
+
+	pub fn is_xa_adpcm(&self, xa_info: &XaAdpcmInfo) -> bool {
+		let mode = self.data[0xF];
+		let file = self.data[0x10];
+		let channel = self.data[0x11];
+		let submode = self.data[0x12];
+
+		if mode == 2 && xa_info.xa_enabled {
+			if !xa_info.xa_filter || (xa_info.xa_filter && xa_info.xa_file == file && xa_info.xa_channel == channel) {
+				// submode must be Audio+Realtime
+				if submode & 0x44 == 0x44 {
+					return true;
+				}
+			}
+		}
+		
+
+		false
 	}
 }
 
