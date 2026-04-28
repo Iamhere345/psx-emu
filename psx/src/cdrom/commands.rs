@@ -333,7 +333,7 @@ impl Cdrom {
 
 			debug!("ReadN sector: {} actual sector: {sect_pos}", self.current_seek + self.read_offset); */
 			if sector.is_xa_adpcm(&self.xa_adpcm_info) {
-				
+				self.xa_adpcm_state.decode_xa_sector(&sector);
 			} else {
 				self.data_fifo.read_sector(data);
 			}

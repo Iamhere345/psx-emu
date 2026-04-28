@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use disc::{CdIndex, Disc};
 use log::*;
 
-use crate::{cdrom::disc::Sector, interrupts::{InterruptFlag, Interrupts}, scheduler::{EventType, Scheduler, SchedulerEvent}, spu::Spu};
+use crate::{cdrom::{disc::Sector, xa_apdcm::XaAdpcmState}, interrupts::{InterruptFlag, Interrupts}, scheduler::{EventType, Scheduler, SchedulerEvent}, spu::Spu};
 use self::commands::*;
 
 mod commands;
@@ -239,6 +239,7 @@ pub struct Cdrom {
 	motor_on: bool,
 
 	xa_adpcm_info: XaAdpcmInfo,
+	xa_adpcm_state: XaAdpcmState,
 
 	audio_muted: bool,
 	pending_atv: [[u8; 2]; 2],
@@ -273,6 +274,7 @@ impl Cdrom {
 			motor_on: true,
 
 			xa_adpcm_info: XaAdpcmInfo::default(),
+			xa_adpcm_state: XaAdpcmState::new(),
 
 			audio_muted: false,
 			pending_atv: [[0x80; 2]; 2],
@@ -485,6 +487,8 @@ impl Cdrom {
 			let sample_l = self.audio_buf.get_sample();
 			let sample_r = self.audio_buf.get_sample();
 			
+			self.apply_volume(sample_l, sample_r)
+		} else if self.xa_adpcm_info.xa_enabled && let Some((sample_l, sample_r)) = self.xa_adpcm_state.get_sample() {
 			self.apply_volume(sample_l, sample_r)
 		} else {
 			(0, 0)
