@@ -1,7 +1,9 @@
+use log::*;
+
 use crate::cdrom::disc::Sector;
 
-const POS_XA_ADPCM_TABLE: [i16; 5] = [0, 60, 115, 98, 122];
-const NEG_XA_ADPCM_TABLE: [i16; 5] = [0, 0, -52, -55, -60];
+const POS_XA_ADPCM_TABLE: [i32; 5] = [0, 60, 115, 98, 122];
+const NEG_XA_ADPCM_TABLE: [i32; 5] = [0, 0, -52, -55, -60];
 
 const ADPCM_BUF_CAPACITY:  usize = 18 * 8 * 28;
 const OUTPUT_BUF_CAPACITY: usize = ADPCM_BUF_CAPACITY * 14 / 6;
@@ -76,6 +78,8 @@ impl XaAdpcmState {
 	}
 
 	pub fn get_sample(&mut self) -> Option<(i16, i16)> {
+		//debug!("new sample index: {} len: {}", self.output_index + 1, self.output_l.len());
+
 		if self.output_index >= self.output_l.len() {
 			return None;
 		}
@@ -98,7 +102,7 @@ impl XaAdpcmState {
 		let is_stereo = if (coding_info & 3) == 1 { true } else { false };
 		let is_18900hz = if ((coding_info >> 2) & 1) == 0 { false } else { true };
 
-		for data_block in sector.audio_sector().chunks_exact(128) {
+		for data_block in sector.xa_audio().chunks_exact(128) {
 			for audio_block in 0..4 {
 				if is_stereo {
 					Self::deocde_block(
@@ -110,7 +114,7 @@ impl XaAdpcmState {
 					);
 					Self::deocde_block(
 						data_block, 
-						audio_block, 
+						audio_block,
 						1, 
 						&mut self.adpcm_samples_r, 
 						&mut self.prev_samples_r
@@ -140,23 +144,25 @@ impl XaAdpcmState {
 		if is_stereo {
 			resample_to_44100hz(&mut self.ringbuf, &mut self.ringbuf_index, &self.adpcm_samples_l, 1, is_18900hz, &mut self.output_r);
 		} else {
-			resample_to_44100hz(&mut self.ringbuf, &mut self.ringbuf_index, &self.adpcm_samples_l, 0, is_18900hz, &mut self.output_l);
+			resample_to_44100hz(&mut self.ringbuf, &mut self.ringbuf_index, &self.adpcm_samples_l, 1, is_18900hz, &mut self.output_r);
 		}
 
+		debug!("Decode XA sector. New len: {} ADPCM len: {}", self.output_l.len(), self.adpcm_samples_l.len());
 
 	}
 
 	fn deocde_block(data_block: &[u8], audio_block_index: usize, nibble: usize, out_buf: &mut Vec<i16>, prev_samples: &mut [i16; 2]) {
-		let shift = 12 - (data_block[4 + audio_block_index * 2 + nibble] & 0xF);
-		let filter = (data_block[4 + audio_block_index * 2 + nibble] & 0x30) >> 4;
+		let header = data_block[4 + audio_block_index * 2 + nibble];
+		let shift = if (header & 0xF) > 12 { 9 } else { 12 - (header & 0xF) };
+		let filter = (header >> 4) & 3;
 
 		let filter_0 = POS_XA_ADPCM_TABLE[filter as usize];
 		let filter_1 = NEG_XA_ADPCM_TABLE[filter as usize];
 
-		for nibble in 0..28 {
-			let sample_byte = (data_block[16 + audio_block_index + nibble * 4] << (nibble * 4) & 0xF);
-			let sample_halfword = (i16::from(sample_byte) << 12) >> 12;
-			let filtered_sample = (sample_halfword << shift) + ((prev_samples[0] * filter_0 + prev_samples[1] * filter_1 + 32) / 64).clamp(-0x8000, 0x7FFF);
+		for i in 0..28 {
+			let sample_byte = (data_block[16 + audio_block_index + i * 4] >> (nibble * 4)) & 0xF;
+			let sample_halfword = (((sample_byte as i8) << 4) >> 4) as i16;
+			let filtered_sample = (i32::from(sample_halfword << shift) + (((i32::from(prev_samples[0]) * filter_0) + (i32::from(prev_samples[1]) * filter_1) + 32) / 64)).clamp(-0x8000, 0x7FFF) as i16;
 
 			prev_samples[1] = prev_samples[0];
 			prev_samples[0] = filtered_sample;
@@ -168,7 +174,7 @@ impl XaAdpcmState {
 fn resample_to_44100hz(ringbuf: &mut [[i16; 32]; 2], ringbuf_index: &mut usize, samples: &Vec<i16>, channel: usize, is_18900hz: bool, output: &mut Vec<i16>) {
 	let pushes_per_sample = if is_18900hz { 2 } else { 1 };
 
-	let mut six_step = 0;
+	let mut six_step = 6;
 
 	for sample in samples {
 		for _ in 0..pushes_per_sample {
@@ -181,6 +187,7 @@ fn resample_to_44100hz(ringbuf: &mut [[i16; 32]; 2], ringbuf_index: &mut usize, 
 
 				for i in 0..7 {
 					output.push(zigzag_interpolate(ringbuf, ringbuf_index, i, channel));
+					//output.push(*sample);
 				}
 			}
 		}
@@ -190,10 +197,8 @@ fn resample_to_44100hz(ringbuf: &mut [[i16; 32]; 2], ringbuf_index: &mut usize, 
 fn zigzag_interpolate(ringbuf: &mut [[i16; 32]; 2], ringbuf_index: &mut usize, table: usize, channel: usize) -> i16 {
 	let mut sum: i32 = 0;
 
-	for i in 0..30 {
-		sum.saturating_add(
-			(i32::from(ringbuf[channel][ringbuf_index.wrapping_sub(i)]) * ZIGZAG_TABLE[table][i]) / 0x8000
-		);
+	for i in 0..29 {
+		sum += (i32::from(ringbuf[channel][ringbuf_index.wrapping_sub(i) & 0x1F]) * ZIGZAG_TABLE[table][i]) / 0x8000
 	}
 
 	sum.clamp(-0x8000, 0x7FFF) as i16

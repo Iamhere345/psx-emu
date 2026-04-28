@@ -4,7 +4,8 @@ use eframe::egui::{self, CentralPanel};
 use eframe::{App, CreationContext};
 use egui_dock::{DockArea, DockState, NodeIndex, Style, SurfaceIndex, TabViewer};
 use rodio::buffer::SamplesBuffer;
-use rodio::OutputStream;
+use rodio::MixerDeviceSink;
+use rodio::nz;
 
 use psx::PSXEmulator;
 
@@ -32,7 +33,7 @@ pub struct FrontendState {
 
 	new_breakpoint_open: bool,
 
-	stream_handle: OutputStream,
+	stream_handle: MixerDeviceSink,
 	//sink: Sink,
 }
 
@@ -132,10 +133,10 @@ impl FrontendState {
 	pub fn new(cc: &CreationContext) -> Self {
 		let bios = std::fs::read(BIOS_PATH).unwrap();
 
-		let stream_handle = rodio::OutputStreamBuilder::open_default_stream().expect("open default audio stream");
+		let stream_handle = rodio::DeviceSinkBuilder::open_default_sink().expect("open default audio stream");
 
 		// TODO adjustable volume
-		let sink = rodio::Sink::connect_new(&stream_handle.mixer());
+		let sink = rodio::Player::connect_new(&stream_handle.mixer());
 		sink.set_volume(3.0);																																
 		
 		let audio_callback = Box::new(move |buffer: Vec<f32>| {
@@ -143,7 +144,7 @@ impl FrontendState {
 				std::thread::sleep(Duration::from_millis(1));
 			}
 
-			sink.append(SamplesBuffer::new(2, 44100, buffer));
+			sink.append(SamplesBuffer::new(nz!(2), nz!(44100), buffer));
 		});
 
 		#[allow(unused_mut)] 

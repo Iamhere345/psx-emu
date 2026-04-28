@@ -7,7 +7,8 @@ use eframe::egui::Ui;
 use rfd::FileDialog;
 use rcue::parser::parse_from_file;
 use rodio::buffer::SamplesBuffer;
-use rodio::OutputStream;
+use rodio::MixerDeviceSink;
+use rodio::nz;
 use log::*;
 
 use psx::PSXEmulator;
@@ -32,7 +33,7 @@ impl Control {
 		}
 	}
 
-	pub fn show(&mut self, ui: &mut Ui, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints, stream_handle: &mut OutputStream) {
+	pub fn show(&mut self, ui: &mut Ui, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints, stream_handle: &mut MixerDeviceSink) {
 		ui.strong("Control");
 
 		ui.horizontal(|ui| {
@@ -113,8 +114,8 @@ impl Control {
 		psx.load_disc(disc);
 	}
 
-	pub fn reset_emu(&mut self, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints, stream_handle: &mut OutputStream) {
-		let sink = rodio::Sink::connect_new(&stream_handle.mixer());
+	pub fn reset_emu(&mut self, psx: &mut PSXEmulator, tty: &mut TTYLogger, breakpoints: &mut Breakpoints, stream_handle: &mut MixerDeviceSink) {
+		let sink = rodio::Player::connect_new(&stream_handle.mixer());
 		sink.set_volume(3.0);
 
 		let audio_callback = Box::new(move |buffer: Vec<f32>| {
@@ -122,7 +123,7 @@ impl Control {
 				std::thread::sleep(Duration::from_millis(1));
 			}
 
-			sink.append(SamplesBuffer::new(2, 44100, buffer));
+			sink.append(SamplesBuffer::new(nz!(2), nz!(44100), buffer));
 		});
 
 		let bios = fs::read(BIOS_PATH).unwrap();

@@ -100,6 +100,7 @@ impl SectorSize {
 #[derive(Default)]
 pub struct XaAdpcmInfo {
 	xa_enabled: bool,
+	xa_muted: bool,
 	xa_filter: bool,
 	xa_file: u8,
 	xa_channel: u8,
@@ -353,6 +354,8 @@ impl Cdrom {
 				2 => self.pending_atv[1][1] = write,
 				// ADPCTL
 				3 => {
+					self.xa_adpcm_info.xa_muted = write & 1 != 0;
+
 					if (write >> 5) & 1 != 0 {
 						self.atv = self.pending_atv;
 					}
@@ -488,7 +491,8 @@ impl Cdrom {
 			let sample_r = self.audio_buf.get_sample();
 			
 			self.apply_volume(sample_l, sample_r)
-		} else if self.xa_adpcm_info.xa_enabled && let Some((sample_l, sample_r)) = self.xa_adpcm_state.get_sample() {
+		} else if self.xa_adpcm_info.xa_enabled && !self.xa_adpcm_info.xa_muted && let Some((sample_l, sample_r)) = self.xa_adpcm_state.get_sample() {
+			//debug!("get sample: 0x{sample_l:X} 0x{sample_r:X}");
 			self.apply_volume(sample_l, sample_r)
 		} else {
 			(0, 0)

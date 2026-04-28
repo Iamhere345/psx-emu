@@ -201,7 +201,7 @@ impl Sector {
 	}
 
 	pub fn xa_audio(&self) -> &[u8] {
-		&self.data[0x18..0x18 + 0x914]
+		&self.data[0x18..0x918]
 	}
 
 	pub fn is_xa_adpcm(&self, xa_info: &XaAdpcmInfo) -> bool {
