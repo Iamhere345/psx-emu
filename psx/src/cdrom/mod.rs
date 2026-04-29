@@ -104,6 +104,7 @@ pub struct XaAdpcmInfo {
 	xa_filter: bool,
 	xa_file: u8,
 	xa_channel: u8,
+	xa_playing: bool,
 }
 
 pub struct DataFifo {
@@ -367,8 +368,10 @@ impl Cdrom {
 		}
 	}
 
+	// HSTS
 	pub fn read_status(&mut self) -> u8 {
 		let result = self.bank
+			| (u8::from(self.xa_adpcm_info.xa_playing) << 2)
 			| (u8::from(self.params_fifo.is_empty()) << 3)
 			| (u8::from(!(self.params_fifo.len() >= 16)) << 4)
 			| (u8::from(!self.result_fifo.is_empty()) << 5)
@@ -485,18 +488,19 @@ impl Cdrom {
 	}
 
 	pub fn get_audio_sample(&mut self) -> (i16, i16) {
-		if !self.audio_muted && self.drive_state == DriveState::Play {
-			// big endian as we are removing fifo entries from the front
-			let sample_l = self.audio_buf.get_sample();
-			let sample_r = self.audio_buf.get_sample();
+		if !self.audio_muted {
+			if !self.xa_adpcm_info.xa_muted && let Some((sample_l, sample_r)) = self.xa_adpcm_state.get_sample() {
+				//debug!("get sample: 0x{sample_l:X} 0x{sample_r:X}");
+				return self.apply_volume(sample_l, sample_r);
+			} else if self.drive_state == DriveState::Play {
+				let sample_l = self.audio_buf.get_sample();
+				let sample_r = self.audio_buf.get_sample();
 			
-			self.apply_volume(sample_l, sample_r)
-		} else if self.xa_adpcm_info.xa_enabled && !self.xa_adpcm_info.xa_muted && let Some((sample_l, sample_r)) = self.xa_adpcm_state.get_sample() {
-			//debug!("get sample: 0x{sample_l:X} 0x{sample_r:X}");
-			self.apply_volume(sample_l, sample_r)
-		} else {
-			(0, 0)
+				return self.apply_volume(sample_l, sample_r);
+			}
 		}
+
+		(0, 0)
 	}
 
 	fn apply_volume(&self, raw_l: i16, raw_r: i16) -> (i16, i16) {

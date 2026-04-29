@@ -58,7 +58,7 @@ pub struct XaAdpcmState {
 
 	// L, R
 	ringbuf: [[i16; 32]; 2],
-	ringbuf_index: usize,
+	ringbuf_index: [usize; 2],
 }
 impl XaAdpcmState {
 	pub fn new() -> Self {
@@ -73,7 +73,7 @@ impl XaAdpcmState {
 			prev_samples_r: [0; 2],
 
 			ringbuf: [[0; 32]; 2],
-			ringbuf_index: 0,
+			ringbuf_index: [0; 2],
 		}
 	}
 
@@ -106,32 +106,32 @@ impl XaAdpcmState {
 			for audio_block in 0..4 {
 				if is_stereo {
 					Self::deocde_block(
-						data_block, 
-						audio_block, 
-						0, 
-						&mut self.adpcm_samples_l, 
+						data_block,
+						audio_block,
+						0,
+						&mut self.adpcm_samples_l,
 						&mut self.prev_samples_l
 					);
 					Self::deocde_block(
-						data_block, 
+						data_block,
 						audio_block,
-						1, 
-						&mut self.adpcm_samples_r, 
+						1,
+						&mut self.adpcm_samples_r,
 						&mut self.prev_samples_r
 					);
 				} else {
 					Self::deocde_block(
-						data_block, 
-						audio_block, 
+						data_block,
+						audio_block,
 						0, 
-						&mut self.adpcm_samples_l, 
+						&mut self.adpcm_samples_l,
 						&mut self.prev_samples_l
 					);
 					Self::deocde_block(
-						data_block, 
-						audio_block, 
-						1, 
-						&mut self.adpcm_samples_l, 
+						data_block,
+						audio_block,
+						1,
+						&mut self.adpcm_samples_l,
 						&mut self.prev_samples_l
 					);
 				}
@@ -139,16 +139,13 @@ impl XaAdpcmState {
 		}
 
 		// stero/mono both need to resample left channel
-		resample_to_44100hz(&mut self.ringbuf, &mut self.ringbuf_index, &self.adpcm_samples_l, 0, is_18900hz, &mut self.output_l);
-
+		resample_to_44100hz(&mut self.ringbuf[0], &mut self.ringbuf_index[0], &self.adpcm_samples_l, is_18900hz, &mut self.output_l);
+		
 		if is_stereo {
-			resample_to_44100hz(&mut self.ringbuf, &mut self.ringbuf_index, &self.adpcm_samples_l, 1, is_18900hz, &mut self.output_r);
+			resample_to_44100hz(&mut self.ringbuf[1], &mut self.ringbuf_index[1], &self.adpcm_samples_r, is_18900hz, &mut self.output_r);
 		} else {
-			resample_to_44100hz(&mut self.ringbuf, &mut self.ringbuf_index, &self.adpcm_samples_l, 1, is_18900hz, &mut self.output_r);
+			resample_to_44100hz(&mut self.ringbuf[1], &mut self.ringbuf_index[1], &self.adpcm_samples_l, is_18900hz, &mut self.output_r);
 		}
-
-		debug!("Decode XA sector. New len: {} ADPCM len: {}", self.output_l.len(), self.adpcm_samples_l.len());
-
 	}
 
 	fn deocde_block(data_block: &[u8], audio_block_index: usize, nibble: usize, out_buf: &mut Vec<i16>, prev_samples: &mut [i16; 2]) {
@@ -171,14 +168,15 @@ impl XaAdpcmState {
 	}
 
 }
-fn resample_to_44100hz(ringbuf: &mut [[i16; 32]; 2], ringbuf_index: &mut usize, samples: &Vec<i16>, channel: usize, is_18900hz: bool, output: &mut Vec<i16>) {
+
+fn resample_to_44100hz(ringbuf: &mut [i16; 32], ringbuf_index: &mut usize, samples: &Vec<i16>, is_18900hz: bool, output: &mut Vec<i16>) {
 	let pushes_per_sample = if is_18900hz { 2 } else { 1 };
 
 	let mut six_step = 6;
 
 	for sample in samples {
 		for _ in 0..pushes_per_sample {
-			ringbuf[channel][*ringbuf_index & 0x1F] = *sample;
+			ringbuf[*ringbuf_index & 0x1F] = *sample;
 			*ringbuf_index = ringbuf_index.wrapping_add(1);
 			six_step -= 1;
 
@@ -186,19 +184,18 @@ fn resample_to_44100hz(ringbuf: &mut [[i16; 32]; 2], ringbuf_index: &mut usize, 
 				six_step = 6;
 
 				for i in 0..7 {
-					output.push(zigzag_interpolate(ringbuf, ringbuf_index, i, channel));
-					//output.push(*sample);
+					output.push(zigzag_interpolate(ringbuf, ringbuf_index, i));
 				}
 			}
 		}
 	}
 }
 
-fn zigzag_interpolate(ringbuf: &mut [[i16; 32]; 2], ringbuf_index: &mut usize, table: usize, channel: usize) -> i16 {
+fn zigzag_interpolate(ringbuf: &mut [i16; 32], ringbuf_index: &mut usize, table: usize) -> i16 {
 	let mut sum: i32 = 0;
 
 	for i in 0..29 {
-		sum += (i32::from(ringbuf[channel][ringbuf_index.wrapping_sub(i) & 0x1F]) * ZIGZAG_TABLE[table][i]) / 0x8000
+		sum += (i32::from(ringbuf[ringbuf_index.wrapping_sub(i) & 0x1F]) * ZIGZAG_TABLE[table][i]) / 0x8000
 	}
 
 	sum.clamp(-0x8000, 0x7FFF) as i16

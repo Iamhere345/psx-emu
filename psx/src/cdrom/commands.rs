@@ -5,7 +5,7 @@ use super::*;
 pub const AVG_CYCLES: u64 = 0xC4E1;
 pub const DELAY_1MS: u64 = 0x844D;
 
-pub const READ_CYCLES: [u64; 2] = [0x6E1CD, 0x36CD2]; // single speed, double speed
+pub const READ_CYCLES: [u64; 2] = [0x6E400, 0x37200]; // single speed, double speed
 //pub const READ_CYCLES: [u64; 2] = [0x100, 0x200];
 pub const PAUSE_CYCLES: [u64; 2] = [0x21181C, 0x10BD93];
 
@@ -340,10 +340,12 @@ impl Cdrom {
 			let int_level = if sector.is_xa_adpcm(&self.xa_adpcm_info) {
 				//debug!("Read XA sector @ {}", self.current_seek + self.read_offset);
 				self.xa_adpcm_state.decode_xa_sector(&sector);
+				self.xa_adpcm_info.xa_playing = true;
 
 				0
 			} else {
 				self.data_fifo.read_sector(data);
+				self.xa_adpcm_info.xa_playing = false;
 
 				1
 			};
