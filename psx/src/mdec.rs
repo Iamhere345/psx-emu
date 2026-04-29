@@ -211,7 +211,7 @@ impl Mdec {
 				self.input_fifo.push_back(write as u16);
 				self.input_fifo.push_back((write >> 16) as u16);
 
-				trace!("[{cmd:?}] write param 0x{write:X} (words left: {words_left}");
+				trace!("[{cmd:?}] write param 0x{write:X} (words left: {words_left})");
 
 				if words_left == 1 {
 					trace!("Exec cmd {cmd:?}");

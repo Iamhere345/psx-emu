@@ -2,12 +2,13 @@ use crate::cdrom::disc::*;
 
 use super::*;
 
-pub const AVG_CYCLES: u64 = 0xC4E1;
-pub const DELAY_1MS: u64 = 0x844D;
+pub const AVG_CYCLES: u64 = 0x10AA0;
+pub const DELAY_1MS: u64 = 0x52B00;
 
 pub const READ_CYCLES: [u64; 2] = [0x6E400, 0x37200]; // single speed, double speed
 //pub const READ_CYCLES: [u64; 2] = [0x100, 0x200];
-pub const PAUSE_CYCLES: [u64; 2] = [0x21181C, 0x10BD93];
+pub const PAUSE_CYCLES: [u64; 2] = [0x227400, 0x5F78A0];
+
 
 const ERROR_INVALID_SUBCMD: u8 = 0x10;
 const ERROR_INVALID_PARAMS: u8 = 0x20;
@@ -300,7 +301,7 @@ impl Cdrom {
 			self.current_seek = self.seek_target;
 		}
 		
-		debug!("ReadN START @ {}", self.current_seek);
+		debug!("ReadN START @ {} (XA Playing: {})", self.current_seek, self.xa_adpcm_info.xa_playing);
 
 		let mut first_response = CmdResponse::int3_status(self);
 
@@ -337,21 +338,25 @@ impl Cdrom {
 			self.read_offset = self.read_offset + CdIndex::new(0, 0, 1);
 
 			// XA sectors dont send INT1 (INT0 = no interrupt)
-			let int_level = if sector.is_xa_adpcm(&self.xa_adpcm_info) {
-				//debug!("Read XA sector @ {}", self.current_seek + self.read_offset);
+			let should_int = if sector.is_xa_adpcm(&self.xa_adpcm_info) {
+				trace!("Read XA sector @ {}", self.current_seek + self.read_offset);
 				self.xa_adpcm_state.decode_xa_sector(&sector);
 				self.xa_adpcm_info.xa_playing = true;
 
-				0
+				false
+			} else if !sector.is_data(&self.xa_adpcm_info) {
+				false
 			} else {
+				trace!("send data sector");
 				self.data_fifo.read_sector(data);
 				self.xa_adpcm_info.xa_playing = false;
 
-				1
+				true
 			};
 
 			let next_read = CmdResponse {
-				int_level: int_level,
+				// FIXME
+				int_level: 1,//u8::from(should_int),
 				result: vec![self.get_stat()],
 				second_response: None,
 				on_complete: Some(Self::read_n_complete)

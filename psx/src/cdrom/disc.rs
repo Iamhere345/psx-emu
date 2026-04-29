@@ -210,17 +210,34 @@ impl Sector {
 		let channel = self.data[0x11];
 		let submode = self.data[0x12];
 
-		if mode == 2 && xa_info.xa_enabled {
-			if !xa_info.xa_filter || (xa_info.xa_filter && xa_info.xa_file == file && xa_info.xa_channel == channel) {
-				// submode must be Audio+Realtime
-				if submode & 0x44 == 0x44 {
-					return true;
+		//debug!("is XA: mode: {mode} filter: {} file: {} == {} channel: {} == {} submode 0x{submode:X} & 0x44: 0x{:X}", xa_info.xa_filter, xa_info.xa_file, file, xa_info.xa_channel, channel, submode & 0x44);
+
+		if mode == 2 {
+			if xa_info.xa_filter {
+				if file != xa_info.xa_file || channel != xa_info.xa_channel {
+					return false;
 				}
 			}
+
+			if xa_info.xa_enabled && (submode & 0x44 == 0x44) {
+				return true;
+			}
 		}
-		
 
 		false
+	}
+
+	pub fn is_data(&self, xa_info: &XaAdpcmInfo) -> bool {
+		let mode = self.data[0xF];
+		let submode = self.data[0x12];
+
+		// reject sector if XA filter enabled and submode == audio+realtime
+		if mode == 2 && xa_info.xa_filter && submode & 0x44 == 0x44 {
+			debug!("reject data sector (submode: 0x{submode:X})");
+			return false;
+		}
+
+		true
 	}
 }
 
