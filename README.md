@@ -10,10 +10,13 @@ Compile from source using `cargo run --release`. If you don't have cargo you can
 
 To use the emulator you need to have a PS1 BIOS file (only SCPH1001 and SCPH101 BIOSes have been tested). It should be placed in a folder called `res` in the project directory and named `SCPH1001.bin` (You can change this by editing the `BIOS_PATH` variable in `desktop/src/app.rs`)
 
+To load a bin/cue, click the `Load Disc` option (press `Reset` when loading a new disc). To load an `EXE`/`PS-EXE`, click the `Sideload EXE` option.
+
 ### Controls
 
-For now only keyboard controls are supported.
-
+Keyboard and physical controllers are supported (select the input device using the dropdown menu at the top of the screen).
+NOTE: To use analog sticks tick the analog checkbox
+Keyboard Controls:
  - Up: W
  - Down: S
  - Left: A
@@ -30,6 +33,10 @@ For now only keyboard controls are supported.
  - Select: Backslash
 
 ## Screenshots
+<img width="1524" height="701" alt="Screenshot 2026-04-29 234028" src="https://github.com/user-attachments/assets/54ab4dcd-42c5-437a-83b8-fd3d9878b59b" />
+<img width="2252" height="1039" alt="Screenshot 2026-03-18 214147" src="https://github.com/user-attachments/assets/cbf985c7-7b7a-4144-b2b1-71c828982df1" />
+<img width="2252" height="1039" alt="Screenshot 2026-04-16 201210" src="https://github.com/user-attachments/assets/24f7fa32-657d-4eed-9471-3565c5a04870" />
+<img width="2252" height="1039" alt="Screenshot 2026-04-22 194031" src="https://github.com/user-attachments/assets/65206899-f398-433e-926f-bfaf7b3f4738" />
 <img width="1802" height="832" alt="Screenshot 2025-09-30 133538" src="https://github.com/user-attachments/assets/2190b21d-4215-463d-a5ee-315ae196f4a1" />
 <img width="1802" height="832" alt="Screenshot 2025-09-30 134950" src="https://github.com/user-attachments/assets/3239c450-6007-4c4b-bee0-c38ae415f331" />
 <img width="1802" height="832" alt="mgs" src="https://github.com/user-attachments/assets/9d6428f8-39f4-478b-b43c-9866eaf007f3" />
