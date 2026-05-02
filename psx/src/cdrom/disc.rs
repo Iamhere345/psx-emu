@@ -231,6 +231,9 @@ impl Sector {
 		let mode = self.data[0xF];
 		let submode = self.data[0x12];
 
+		// FIXME Colin Mcrae Rally 2.0 hangs on rejected data sectors
+		return true;
+
 		// reject sector if XA filter enabled and submode == audio+realtime
 		if mode == 2 && xa_info.xa_filter && submode & 0x44 == 0x44 {
 			debug!("reject data sector (submode: 0x{submode:X})");

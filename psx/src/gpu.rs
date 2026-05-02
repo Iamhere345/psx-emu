@@ -15,7 +15,7 @@ enum DrawCommand {
 	QuickFill(u32)
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum TexBitDepth {
 	#[default]
 	FourBit = 0,
@@ -1253,6 +1253,7 @@ impl Gpu {
 						self.tex_page = TexturePage {
 							x_base: 64 * (tex_page & 0xF),
 							y_base: 256 * ((tex_page >> 4) & 1),
+							transp_type: SemiTransparency::from_bits((tex_page >> 5) & 3),
 							bit_depth: TexBitDepth::from_bits((tex_page >> 7) & 3),
 							..self.tex_page
 						};
@@ -1410,33 +1411,33 @@ impl Gpu {
 	}
 
 	fn apply_semi_transparency(&self, background: u16, foreground: u16) -> u16 {
-		let b = Colour::from_rgb555(background);
-		let f = Colour::from_rgb555(foreground);
-
+		let b = Colour::rgb555_to_rgb888(background);
+		let f = Colour::rgb555_to_rgb888(foreground);
+	
 		let result = match self.tex_page.transp_type {
 			SemiTransparency::HalfBPlusHalfF => Colour {
-				r: ((0.5 * b.r as f64) + (0.5 * f.r as f64)).clamp(0.0, 31.0) as u8,
-				g: ((0.5 * b.g as f64) + (0.5 * f.g as f64)).clamp(0.0, 31.0) as u8,
-				b: ((0.5 * b.b as f64) + (0.5 * f.b as f64)).clamp(0.0, 31.0) as u8,
+				r: ((b.r as i32 + f.r as i32) / 2).clamp(0, 0xFF) as u8,
+				g: ((b.g as i32 + f.g as i32) / 2).clamp(0, 0xFF) as u8,
+				b: ((b.b as i32 + f.b as i32) / 2).clamp(0, 0xFF) as u8,
 			},
 			SemiTransparency::BPlusF => Colour {
-				r: (b.r as f64 + f.r as f64).clamp(0.0, 31.0) as u8,
-				g: (b.g as f64 + f.g as f64).clamp(0.0, 31.0) as u8,
-				b: (b.b as f64 + f.b as f64).clamp(0.0, 31.0) as u8,
+				r: (b.r as i32 + f.r as i32).clamp(0, 0xFF) as u8,
+				g: (b.g as i32 + f.g as i32).clamp(0, 0xFF) as u8,
+				b: (b.b as i32 + f.b as i32).clamp(0, 0xFF) as u8,
 			},
 			SemiTransparency::BMinusF => Colour {
-				r: (b.r as f64 - f.r as f64).clamp(0.0, 31.0) as u8,
-				g: (b.g as f64 - f.g as f64).clamp(0.0, 31.0) as u8,
-				b: (b.b as f64 - f.b as f64).clamp(0.0, 31.0) as u8,
+				r: (b.r as i32 - f.r as i32).clamp(0, 0xFF) as u8,
+				g: (b.g as i32 - f.g as i32).clamp(0, 0xFF) as u8,
+				b: (b.b as i32 - f.b as i32).clamp(0, 0xFF) as u8,
 			},
 			SemiTransparency::BPlusFOver4 => Colour {
-				r: (b.r as f64 + (0.25 * f.r as f64)).clamp(0.0, 31.0) as u8,
-				g: (b.g as f64 + (0.25 * f.g as f64)).clamp(0.0, 31.0) as u8,
-				b: (b.b as f64 + (0.25 * f.b as f64)).clamp(0.0, 31.0) as u8,
-			}
+				r: (b.r as i32 + (f.r as i32 / 4)).clamp(0, 0xFF) as u8,
+				g: (b.g as i32 + (f.g as i32 / 4)).clamp(0, 0xFF) as u8,
+				b: (b.b as i32 + (f.b as i32 / 4)).clamp(0, 0xFF) as u8,
+			},
 		};
 
-		(result.r as u16) | ((result.g as u16) << 5) | ((result.b as u16) << 10)
+		result.truncate_to_15bit()
 	}
 	
 }
