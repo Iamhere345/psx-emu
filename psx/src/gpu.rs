@@ -921,18 +921,17 @@ impl Gpu {
 		let dest_x = (self.gp0_params[0] & 0x3FF) as u16;
 		let dest_y = ((self.gp0_params[0] >> 16) & 0x1FF) as u16;
 
-		let mut width = (self.gp0_params[1] & 0x3FF) as u16;
+		let mut width = ((self.gp0_params[1].wrapping_sub(1) & 0x3FF) + 1) as u16;
 		if width == 0 {
 			width = 1024;
 		}
 
-		let mut height = ((self.gp0_params[1] >> 16) & 0x1FF) as u16;
+		let mut height = (((self.gp0_params[1] >> 16).wrapping_sub(1) & 0x1FF) + 1) as u16;
 		if height == 0 {
 			height = 512;
 		}
 
 		let halfwords = u32::from(width) * u32::from(height);
-		let extra_halfword = (u32::from(width) * u32::from(height)) % 2 != 0;
 
 		trace!("init dma dest: ({dest_x}, {dest_y}) size: ({width}, {height}) halfwords: 0x{:X}", width * height);
 
@@ -943,7 +942,7 @@ impl Gpu {
 			height,
 			current_row: 0,
 			current_col: 0,
-			halfwords_left: halfwords + u32::from(extra_halfword),
+			halfwords_left: halfwords,
 		}
 	}
 
@@ -957,7 +956,7 @@ impl Gpu {
 			// wrap from 1023 to 0
 			let vram_col = ((info.dest_x + info.current_col) & 0x3FF) as u32;
 
-			self.draw_pixel_15bit(halfword, vram_col, vram_row, false, false);
+			self.draw_pixel_15bit(halfword, vram_col, vram_row, false, halfword & 0x8000 != 0);
 
 			info.current_col += 1;
 			info.halfwords_left -= 1;
@@ -1026,7 +1025,7 @@ impl Gpu {
 			width = 1024;
 		}
 
-		let mut height = (((self.gp0_params[2].wrapping_sub(1) >> 16) & 0x1FF) + 1) as u16;
+		let mut height = (((self.gp0_params[2] >> 16).wrapping_sub(1) & 0x1FF) + 1) as u16;
 		if height == 0 {
 			height = 512;
 		}
@@ -1039,7 +1038,7 @@ impl Gpu {
 
 				let src = self.vram[src_addr];
 				//trace!("[VRAM-VRAM DMA] draw pixel 0x{src:X} at ({}, {})", (dest_x + x_offset) as u32, (dest_y + y_offset) as u32);
-				self.draw_pixel_15bit(src, ((dest_x + x_offset) & 0x3FF) as u32, ((dest_y + y_offset) & 0x1FF) as u32, false, false);
+				self.draw_pixel_15bit(src, ((dest_x + x_offset) & 0x3FF) as u32, ((dest_y + y_offset) & 0x1FF) as u32, false, src & 0x8000 != 0);
 			}
 		}
 	}
