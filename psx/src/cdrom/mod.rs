@@ -232,12 +232,15 @@ pub struct Cdrom {
 
 	read_offset: CdIndex,
 	read_paused: bool,
+	current_track: usize,
 
 	drive_speed: DriveSpeed,
 	drive_state: DriveState,
 	sector_size: SectorSize,
 	last_sector_size: SectorSize,
 	ignore_cur_sector_size: bool,
+	report_irq: bool,
+	auto_pause: bool,
 	motor_on: bool,
 
 	xa_adpcm_info: XaAdpcmInfo,
@@ -267,12 +270,15 @@ impl Cdrom {
 
 			read_offset: CdIndex::ZERO,
 			read_paused: false,
+			current_track: 0,
 
 			drive_speed: DriveSpeed::SingleSpeed,
 			drive_state: DriveState::Idle,
 			sector_size: SectorSize::DataOnly,
 			last_sector_size: SectorSize::DataOnly,
 			ignore_cur_sector_size: false,
+			report_irq: false,
+			auto_pause: false,
 			motor_on: true,
 
 			xa_adpcm_info: XaAdpcmInfo::default(),

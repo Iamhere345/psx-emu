@@ -282,8 +282,11 @@ impl Cdrom {
 		self.sector_size = SectorSize::from_bits((new_mode >> 5) & 1 != 0);
 		self.ignore_cur_sector_size = (new_mode >> 4) & 1 != 0;
 		self.xa_adpcm_info.xa_filter = (new_mode >> 3) & 1 != 0;
+		self.report_irq = (new_mode >> 2) & 1 != 0;
+		self.auto_pause = (new_mode >> 1) & 1 != 0;
 
-		debug!("SetMode 0b{new_mode:b} {:?} {:?} ignore bit: {} XA Enabled: {} Use XA Filter: {}", self.drive_speed, self.sector_size, self.ignore_cur_sector_size, self.xa_adpcm_info.xa_enabled, self.xa_adpcm_info.xa_filter);
+		debug!("SetMode 0b{new_mode:b} {:?} {:?} ignore bit: {} XA Enabled: {} Use XA Filter: {} Report IRQs: {} AutoPause: {}", 
+			self.drive_speed, self.sector_size, self.ignore_cur_sector_size, self.xa_adpcm_info.xa_enabled, self.xa_adpcm_info.xa_filter, self.report_irq, self.auto_pause);
 
 		(CmdResponse::int3_status(self), AVG_CYCLES)
 	}
@@ -408,13 +411,21 @@ impl Cdrom {
 		// if track param is sent and track>0, start playback at the start of the track
 		// otherwise start playback for current seek location
 		if let Some(track) = self.params_fifo.pop_front() {
-			debug!("Play track {track}");
 			if track > 0 {
-				self.current_seek = disc.get_track_start(track as usize);
+				// if track > total num of tracks, restart the current track
+				let track_num = if track as usize > disc.tracks.len() {
+					disc.get_track_num((self.current_seek + self.read_offset).to_lba()).unwrap().0
+				} else {
+					(track - 1) as usize
+				};
+				
+				self.current_seek = disc.get_track_start(track_num);
+
 				debug!("Play track {track} @ {}", self.current_seek);
 			}
 		} else {
 			self.current_seek = self.seek_target;
+			self.current_track = disc.get_track_num(self.seek_target.to_lba()).unwrap().0;
 			debug!("Play @ {}", self.current_seek);
 		}
 
@@ -444,6 +455,23 @@ impl Cdrom {
 			let data = sector.audio_sector();
 
 			self.audio_buf.read_sector(data);
+
+			let old_track = self.current_track;
+			self.current_track = disc.get_track_num((self.current_seek + self.read_offset).to_lba()).unwrap().0;
+
+			// AutoPause INT4
+			if self.auto_pause && self.current_track != old_track {
+				self.drive_state = DriveState::Idle;
+
+				debug!("INT4 autopause (track {} != track {})", self.current_track, old_track);
+
+				return Some((CmdResponse {
+					int_level: 4,
+					result: vec![self.get_stat()],
+					second_response: None,
+					on_complete: None
+				}, AVG_CYCLES));
+			}
 
 			self.read_offset = self.read_offset + CdIndex::new(0, 0, 1);
 

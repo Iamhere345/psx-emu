@@ -136,6 +136,7 @@ impl Disc {
 
 	}
 
+	// TODO reconcile these two functions (num works for CDDA autopause, number works for reading sectors)
 	pub fn get_track_number(&self, sector_addr: usize) -> (usize, usize) {
 		let mut track_addr = 0;
 
@@ -149,6 +150,16 @@ impl Disc {
 
 		panic!("couldn't find track");
 	} 
+
+	pub fn get_track_num(&self, lba: usize) -> Option<(usize, usize)> {
+		for (track_num, track) in self.tracks.iter().enumerate() {
+			if lba >= track.start_lba && lba < track.end_lba {
+				return Some((track_num, track.start_lba));
+			}
+		}
+
+		None
+	}
 
 	pub fn get_track_start(&self, track_num: usize) -> CdIndex {
 		CdIndex::from_lba(self.tracks[track_num - 1].start_lba)
