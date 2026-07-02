@@ -473,9 +473,50 @@ impl Cdrom {
 				}, AVG_CYCLES));
 			}
 
+			let current_index = (self.current_seek + self.read_offset);
+			let relative_index = disc.get_track_offset(current_index).0;
+			let abs_sect = current_index.sectors;
+			let track_sect = relative_index.sectors;
+
 			self.read_offset = self.read_offset + CdIndex::new(0, 0, 1);
 
-			// TODO report irqs
+			// report IRQs
+			if self.report_irq && (abs_sect == 0x0 || abs_sect == 0x20 || abs_sect == 0x40 || abs_sect == 0x60) {
+				debug!("Report IRQ: sect: 0x{abs_sect:X} absolute");
+				return Some((CmdResponse {
+					int_level: 1,
+					result: vec![
+						self.get_stat(),
+						binary_to_bcd(self.current_track as u8),
+						1,
+						binary_to_bcd(current_index.minutes),
+						binary_to_bcd(current_index.seconds),
+						binary_to_bcd(current_index.sectors),
+						0,
+						0
+					],
+					second_response: None,
+					on_complete: Some(Self::play_complete)
+				}, AVG_CYCLES))
+			} else if self.report_irq && (track_sect == 0x10 || track_sect == 0x30 || track_sect == 0x50 || track_sect == 0x70) {
+				debug!("Report IRQ: sect: 0x{abs_sect:X} relative");
+				return Some((CmdResponse {
+					int_level: 1,
+					result: vec![
+						self.get_stat(), 
+						binary_to_bcd(self.current_track as u8),
+						1,
+						binary_to_bcd(relative_index.minutes),
+						binary_to_bcd(relative_index.seconds) | 0x80,
+						binary_to_bcd(relative_index.sectors),
+						0,
+						0
+					],
+					second_response: None,
+					on_complete: Some(Self::play_complete)
+				}, AVG_CYCLES))
+			}
+
 			let next_read = CmdResponse {
 				int_level: 0,
 				result: vec![0],
